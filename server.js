@@ -1002,6 +1002,10 @@ app.use('/api/*', (req, res) => {
   res.status(404).json({ error: 'Endpoint da API não encontrado' });
 });
 
+app.use('*', (req, res) => {
+  res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // ==================== SERVIÇO DO FRONTEND ====================
 
 // Rota para servir a página HTML principal
