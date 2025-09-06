@@ -5,9 +5,9 @@ const bodyParser = require('body-parser');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
+const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 // ==================== CONFIGURAÇÕES DE SEGURANÇA ====================
 
@@ -26,6 +26,7 @@ app.use(limiter);
 
 // Middlewares
 app.use(bodyParser.json({ limit: '10mb' }));
+// Servir arquivos estáticos - importante para a Vercel
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Log de todas as requisições
@@ -48,19 +49,36 @@ app.use((req, res, next) => {
 });
 
 // ==================== CONEXÃO COM BANCO DE DADOS ====================
+// Na Vercel, usamos diretório temporário
+const dbPath = process.env.NODE_ENV === 'production' 
+  ? '/tmp/sqlite.db' 
+  : './database/sqlite.db';
 
-const db = new sqlite3.Database('./database/escola_musica.db', (err) => {
-  if (err) {
-    console.error('Erro ao conectar ao banco de dados:', err.message);
-  } else {
-    console.log('Conectado ao banco de dados SQLite.');
-    initializeDatabase();
+// Garantir que o diretório existe
+if (process.env.NODE_ENV !== 'production') {
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
-});
+}
+
+let db;
+
+// Função para inicializar o banco
+function initializeDatabase() {
+  db = new sqlite3.Database(dbPath, (err) => {
+    if (err) {
+      console.error('Erro ao conectar ao banco de dados:', err.message);
+    } else {
+      console.log('Conectado ao banco de dados SQLite.');
+      createTables();
+    }
+  });
+}
 
 // ==================== INICIALIZAÇÃO DO BANCO ====================
 
-function initializeDatabase() {
+function createTables() {
   const tables = [
     `CREATE TABLE IF NOT EXISTS professores (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,7 +103,6 @@ function initializeDatabase() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`,
 
-    // Nova tabela para configurações de aula
     `CREATE TABLE IF NOT EXISTS aulas_configuradas (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       instrumento TEXT NOT NULL,
@@ -97,7 +114,6 @@ function initializeDatabase() {
       FOREIGN KEY (professor_id) REFERENCES professores (id)
     )`,
 
-    // Tabela para os dias da semana de cada aula
     `CREATE TABLE IF NOT EXISTS aulas_dias_semana (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       aula_id INTEGER NOT NULL,
@@ -107,7 +123,6 @@ function initializeDatabase() {
       UNIQUE(aula_id, dia_semana)
     )`,
 
-    // Tabela para vincular alunos às aulas
     `CREATE TABLE IF NOT EXISTS aulas_alunos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       aula_id INTEGER NOT NULL,
@@ -140,6 +155,9 @@ function initializeDatabase() {
     });
   });
 }
+
+// Inicializar o banco de dados
+initializeDatabase();
 
 // ==================== API GENÉRICA ====================
 
@@ -965,6 +983,13 @@ app.get('/api/relatorios/resumo', (req, res) => {
   }
 });
 
+// ==================== ROTAS PARA O CLIENTE ====================
+
+// Rota para servir o aplicativo React
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // ==================== MIDDLEWARE DE ERRO ====================
 
 app.use((err, req, res, next) => {
@@ -981,23 +1006,16 @@ app.use('*', (req, res) => {
   res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// ==================== INICIAR SERVIDOR ====================
+// ==================== CONFIGURAÇÃO PARA VERCEL ====================
 
-app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Acesse: http://localhost:${PORT}`);
-});
-
-// Fechar a conexão com o banco ao encerrar o servidor
-process.on('SIGINT', () => {
-  db.close((err) => {
-    if (err) {
-      console.error(err.message);
-    }
-    console.log('Conexão com o banco de dados fechada.');
-    process.exit(0);
-  });
-});
-
-// Exportar para testes
+// A Vercel espera que exportemos a app como um módulo
 module.exports = app;
+
+// Se não estivermos na Vercel, iniciamos o servidor normalmente
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`Acesse: http://localhost:${PORT}`);
+  });
+}
