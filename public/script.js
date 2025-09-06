@@ -18,19 +18,35 @@ const searchInput = document.getElementById('searchInput');
 
 // Inicialização da aplicação
 document.addEventListener('DOMContentLoaded', async function () {
+  const loader = document.getElementById('loader');
+  const loginContainer = document.getElementById('loginContainer');
+  const mainSystem = document.getElementById('mainSystem');
+
+  // Mostra o loader
+  loader.style.display = 'flex';
+  loginContainer.style.display = 'none';
+  mainSystem.style.display = 'none';
+
   // Verificar se há um token salvo
   const token = localStorage.getItem('authToken');
-
-  // Testar conexão com API primeiro
   const apiConnected = await testAPIConnection();
 
+  // Simule um pequeno delay para UX (opcional)
+  //await new Promise(resolve => setTimeout(resolve, 600));
+
+  // Esconde o loader e mostra a tela correta
+  loader.style.display = 'none';
   if (token && apiConnected) {
+    mainSystem.style.display = 'flex';
     // Verificar se o token é válido
     validateToken(token);
   } else {
-    showLogin();
+    loginContainer.style.display = 'flex';
+    //showLogin();
   }
 
+  // Verificar tema salvo
+  verifyTheme()
   // Configurar eventos
   setupEventListeners();
   showToast(`Sistema carregado`, 'success');
@@ -132,6 +148,49 @@ function showToast(message, type = 'info', duration = 3000) {
 
   return toast;
 }
+
+// Função para alternar entre temas
+function toggleTheme() {
+  const html = document.documentElement;
+  const currentTheme = html.getAttribute('data-theme');
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  
+  html.setAttribute('data-theme', newTheme);
+  localStorage.setItem('theme', newTheme);
+}
+
+// Verificar tema salvo ao carregar a página
+function verifyTheme() {
+  const savedTheme = localStorage.getItem('theme') || 'light';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+  
+  // Adicionar botão de toggle de tema
+  const themeToggleBtn = document.createElement('button');
+  themeToggleBtn.className = 'theme-toggle';
+  themeToggleBtn.innerHTML = '<i class="fas fa-moon"></i>';
+  themeToggleBtn.addEventListener('click', toggleTheme);
+  
+  // Adicionar ao header
+  const headerActions = document.querySelector('.header-actions');
+  if (headerActions) {
+    headerActions.appendChild(themeToggleBtn);
+  }
+  
+  // Atualizar ícone conforme o tema
+  function updateThemeIcon() {
+    const currentTheme = document.documentElement.getAttribute('data-theme');
+    themeToggleBtn.innerHTML = currentTheme === 'dark' 
+      ? '<i class="fas fa-sun"></i>' 
+      : '<i class="fas fa-moon"></i>';
+  }
+  
+  // Observar mudanças no tema
+  const observer = new MutationObserver(updateThemeIcon);
+  observer.observe(document.documentElement, { 
+    attributes: true, 
+    attributeFilter: ['data-theme'] 
+  });
+};
 
 function getToastColor(type) {
   const colors = {

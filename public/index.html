@@ -11,7 +11,11 @@
 
 <body>
     <div class="container">
-        <!-- Tela de Login (inicialmente visível) -->
+        <!-- Tela de Loading -->
+        <div id="loader" style="display: flex; align-items: center; justify-content: center; height: 100vh;">
+            <div class="spinner"></div>
+        </div>
+        <!-- Tela de Login -->
         <div class="login-container" id="loginContainer">
             <div class="login-form">
                 <div class="logo">
@@ -33,7 +37,7 @@
             </div>
         </div>
 
-        <!-- Sistema Principal (inicialmente oculto) -->
+        <!-- Sistema Principal -->
         <div class="main-system" id="mainSystem" style="display: none;">
             <!-- Overlay para fechar o menu ao clicar fora -->
             <div class="sidebar-overlay" id="sidebarOverlay"></div>

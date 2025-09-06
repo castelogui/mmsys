@@ -983,13 +983,6 @@ app.get('/api/relatorios/resumo', (req, res) => {
   }
 });
 
-// ==================== ROTAS PARA O CLIENTE ====================
-
-// Rota para servir o aplicativo React
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 // ==================== MIDDLEWARE DE ERRO ====================
 
 app.use((err, req, res, next) => {
