@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MusicSchool Manager</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Tela de Login (inicialmente visível) -->
+        <div class="login-container" id="loginContainer">
+            <div class="login-form">
+                <div class="logo">
+                    <i class="fas fa-music"></i>
+                    <h1>MusicSchool Manager</h1>
+                </div>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="email">E-mail</label>
+                        <input type="email" id="email" class="form-control" placeholder="Seu e-mail" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Senha</label>
+                        <input type="password" id="password" class="form-control" placeholder="Sua senha" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Entrar</button>
+                </form>
+                <p class="login-info">Use: admin@music.com / senha123 para teste</p>
+            </div>
+        </div>
+
+        <!-- Sistema Principal (inicialmente oculto) -->
+        <div class="main-system" id="mainSystem" style="display: none;">
+            <!-- Overlay para fechar o menu ao clicar fora -->
+            <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+            <!-- Sidebar -->
+            <div class="sidebar" id="sidebar">
+                <div class="logo">
+                    <i class="fas fa-music"></i>
+                    <h1>MusicSchool Manager</h1>
+                    <button class="sidebar-close" id="sidebarClose">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <ul class="menu">
+                    <li class="active" data-section="dashboard"><i class="fas fa-home"></i> Dashboard</li>
+                    <li data-section="alunos"><i class="fas fa-user-graduate"></i> Alunos</li>
+                    <li data-section="professores"><i class="fas fa-chalkboard-teacher"></i> Professores</li>
+                    <li data-section="aulas"><i class="fas fa-calendar-alt"></i> Aulas</li>
+                    <li data-section="financeiro"><i class="fas fa-money-bill-wave"></i> Financeiro</li>
+                    <li data-section="relatorios"><i class="fas fa-chart-bar"></i> Relatórios</li>
+                    <li id="logoutBtn"><i class="fas fa-sign-out-alt"></i> Sair</li>
+                </ul>
+
+                <div class="user-info">
+                    <!-- Imagem com fallback via JavaScript -->
+                    <svg width="70" height="70" viewBox="0 0 70 70" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="70" height="70" fill="#4361ee" />
+                        <text x="35" y="40" dominant-baseline="middle" text-anchor="middle"
+                            font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="white">AD</text>
+                    </svg>
+                    <h3 id="userName">Administrador</h3>
+                    <p id="userRole">Admin</p>
+                </div>
+            </div>
+            <!-- Main Content -->
+            <div class="main-content">
+                <div class="header">
+                    <div class="header-left">
+                        <button class="menu-toggle" id="menuToggle">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <h2 id="sectionTitle">Dashboard</h2>
+                    </div>
+                    <div class="header-actions">
+                        <div class="search-box">
+                            <input type="text" class="form-control" id="searchInput" placeholder="Pesquisar...">
+                        </div>
+                        <button class="btn btn-primary" id="addButton" style="display: none;">Adicionar Novo</button>
+                    </div>
+                </div>
+
+                <!-- Conteúdo Dinâmico -->
+                <div id="contentArea">
+                    <!-- Dashboard -->
+                    <div class="content-section" id="dashboardSection">
+                        <div class="stats">
+                            <div class="stat-card students">
+                                <div class="stat-icon">
+                                    <i class="fas fa-user-graduate"></i>
+                                </div>
+                                <div class="stat-info">
+                                    <h3 id="totalAlunos">0</h3>
+                                    <p>Alunos</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card teachers">
+                                <div class="stat-icon">
+                                    <i class="fas fa-chalkboard-teacher"></i>
+                                </div>
+                                <div class="stat-info">
+                                    <h3 id="totalProfessores">0</h3>
+                                    <p>Professores</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card classes">
+                                <div class="stat-icon">
+                                    <i class="fas fa-calendar-alt"></i>
+                                </div>
+                                <div class="stat-info">
+                                    <h3 id="totalAulasConfiguradas">0</h3>
+                                    <p>Aulas Configuradas</p>
+                                </div>
+                            </div>
+
+                            <div class="stat-card finance">
+                                <div class="stat-icon">
+                                    <i class="fas fa-money-bill-wave"></i>
+                                </div>
+                                <div class="stat-info">
+                                    <h3 id="receitaMensal">R$ 0</h3>
+                                    <p>Receita mensal</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="charts-container">
+                            <div class="content-section">
+                                <h3>Receita Mensal (Últimos 6 meses)</h3>
+                                <canvas id="revenueChart" height="100"></canvas>
+                            </div>
+
+                            <div class="content-section">
+                                <h3>Distribuição de Alunos por Instrumento</h3>
+                                <canvas id="instrumentsChart" height="100"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Alunos -->
+                    <div class="content-section" id="alunosSection" style="display: none;">
+                        <div class="section-header">
+                            <h3>Gerenciamento de Alunos</h3>
+                        </div>
+
+                        <table id="alunosTable">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>E-mail</th>
+                                    <th>Telefone</th>
+                                    <th>Instrumento</th>
+                                    <th>Status</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Os dados serão preenchidos via JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Professores -->
+                    <div class="content-section" id="professoresSection" style="display: none;">
+                        <div class="section-header">
+                            <h3>Gerenciamento de Professores</h3>
+                        </div>
+
+                        <table id="professoresTable">
+                            <thead>
+                                <tr>
+                                    <th>Nome</th>
+                                    <th>E-mail</th>
+                                    <th>Especialidade</th>
+                                    <th>Limite de Alunos</th>
+                                    <th>Repasse</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Os dados serão preenchidos via JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Aulas -->
+                    <div class="content-section" id="aulasSection" style="display: none;">
+                        <div class="section-header">
+                            <h3>Configuração de Aulas</h3>
+                        </div>
+
+                        <table id="aulasTable">
+                            <thead>
+                                <tr>
+                                    <th>Instrumento</th>
+                                    <th>Turno</th>
+                                    <th>Professor</th>
+                                    <th>Dias da Semana</th>
+                                    <th>Total de Alunos</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Os dados serão preenchidos via JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Financeiro -->
+                    <div class="content-section" id="financeiroSection" style="display: none;">
+                        <div class="section-header">
+                            <h3>Gestão Financeira</h3>
+                        </div>
+
+                        <table id="financeiroTable">
+                            <thead>
+                                <tr>
+                                    <th>Aluno</th>
+                                    <th>Valor</th>
+                                    <th>Vencimento</th>
+                                    <th>Pagamento</th>
+                                    <th>Repasse</th>
+                                    <th>Status</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Os dados serão preenchidos via JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Relatórios -->
+                    <div class="content-section" id="relatoriosSection" style="display: none;">
+                        <div class="section-header">
+                            <h3>Relatórios Detalhados</h3>
+                            <div>
+                                <button class="btn btn-primary" id="generateReportBtn">Gerar Relatório</button>
+                            </div>
+                        </div>
+
+                        <div class="report-filters">
+                            <div class="form-group">
+                                <label for="reportType">Tipo de Relatório</label>
+                                <select id="reportType" class="form-control">
+                                    <option value="financial">Financeiro</option>
+                                    <option value="classes">Aulas</option>
+                                    <option value="students">Alunos</option>
+                                    <option value="teachers">Professores</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="startDate">Data Início</label>
+                                <input type="date" id="startDate" class="form-control">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="endDate">Data Fim</label>
+                                <input type="date" id="endDate" class="form-control">
+                            </div>
+                        </div>
+
+                        <div class="report-results" id="reportResults">
+                            <p>Selecione os filtros e clique em "Gerar Relatório"</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para adicionar/editar -->
+    <div class="modal" id="formModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">Adicionar Novo</h3>
+                <span class="close">&times;</span>
+            </div>
+            <form id="modalForm">
+                <div id="formFields">
+                    <!-- Campos do formulário serão preenchidos via JavaScript -->
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Salvar</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de confirmação -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Confirmar ação</h3>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage">Tem certeza que deseja executar esta ação?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="confirmCancel">Cancelar</button>
+                <button class="btn btn-danger" id="confirmAction">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Container para toasts (será criado dinamicamente pelo JavaScript) -->
+
+    <!-- Usando Chart.js localmente em vez do CDN -->
+    <script src="js/chart.js"></script>
+    <script src="js/script.js"></script>
+</body>
+
+</html>
