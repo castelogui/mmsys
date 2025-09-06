@@ -1002,19 +1002,10 @@ app.use('/api/*', (req, res) => {
   res.status(404).json({ error: 'Endpoint da API não encontrado' });
 });
 
-app.use('*', (req, res) => {
-  res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 // ==================== SERVIÇO DO FRONTEND ====================
 
 // Rota para servir a página HTML principal
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// Rota de fallback para qualquer outra URL
-app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 // ==================== CONFIGURAÇÃO PARA VERCEL ====================
