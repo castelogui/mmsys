@@ -18,17 +18,31 @@ const searchInput = document.getElementById('searchInput');
 
 // Inicialização da aplicação
 document.addEventListener('DOMContentLoaded', async function () {
+  const loader = document.getElementById('loader');
+  const loginContainer = document.getElementById('loginContainer');
+  const mainSystem = document.getElementById('mainSystem');
+
+  // Mostra o loader
+  loader.style.display = 'flex';
+  loginContainer.style.display = 'none';
+  mainSystem.style.display = 'none';
+
   // Verificar se há um token salvo
   const token = localStorage.getItem('authToken');
-
-  // Testar conexão com API primeiro
   const apiConnected = await testAPIConnection();
 
+  // Simule um pequeno delay para UX (opcional)
+  //await new Promise(resolve => setTimeout(resolve, 600));
+
+  // Esconde o loader e mostra a tela correta
+  loader.style.display = 'none';
   if (token && apiConnected) {
+    mainSystem.style.display = 'flex';
     // Verificar se o token é válido
     validateToken(token);
   } else {
-    showLogin();
+    loginContainer.style.display = 'flex';
+    //showLogin();
   }
 
   // Configurar eventos
