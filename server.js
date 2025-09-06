@@ -1008,13 +1008,13 @@ app.use('*', (req, res) => {
 
 // ==================== SERVIÇO DO FRONTEND ====================
 
-// Servir arquivos estáticos (CSS, JS, imagens)
+// Serve arquivos estáticos
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Rota de fallback para SPA - deve ser a última rota
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
-})
+});
 
 // ==================== CONFIGURAÇÃO PARA VERCEL ====================
 
