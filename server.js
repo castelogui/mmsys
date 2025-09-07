@@ -1,6 +1,5 @@
 const express = require('express');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
 const bodyParser = require('body-parser');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -53,39 +52,54 @@ app.use((req, res, next) => {
 
 const Database = {
   db: null,
-  dbPath: process.env.NODE_ENV === 'production'
-    ? '/tmp/sqlite.db'
-    : './database/sqlite.db',
+  isPostgreSQL: process.env.NODE_ENV === 'production',
 
   /**
    * Inicializa a conexão com o banco de dados
    */
-  initialize: function () {
-    // Garantir que o diretório existe em ambiente de desenvolvimento
-    if (process.env.NODE_ENV !== 'production') {
-      const dir = path.dirname(this.dbPath);
+  initialize: async function () {
+    if (this.isPostgreSQL) {
+      // Configuração PostgreSQL para produção
+      const { Client } = require('pg');
+      this.db = new Client({
+        connectionString: process.env.DATABASE_URL || "postgresql://postgres:[YOUR-PASSWORD]@db.raxextmpojeoxncbuqtu.supabase.co:5432/postgres",
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      });
+
+      try {
+        await this.db.connect();
+        console.log('Conectado ao PostgreSQL com sucesso');
+        await this.createTables();
+      } catch (err) {
+        console.error('Erro ao conectar ao PostgreSQL:', err);
+      }
+    } else {
+      // Configuração SQLite para desenvolvimento
+      const sqlite3 = require('sqlite3').verbose();
+      const dbPath = './database/sqlite.db';
+
+      // Garantir que o diretório existe
+      const dir = path.dirname(dbPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
+
+      this.db = new sqlite3.Database(dbPath, (err) => {
+        if (err) {
+          console.error('Erro ao conectar ao SQLite:', err.message);
+        } else {
+          console.log('Conectado ao SQLite com sucesso');
+          this.createTables();
+        }
+      });
     }
-
-    this.db = new sqlite3.Database(this.dbPath, (err) => {
-      if (err) {
-        console.error('Erro ao conectar ao banco de dados:', err.message);
-      } else {
-        console.log('Conectado ao banco de dados SQLite.');
-        this.createTables();
-      }
-    });
-
-    return this.db;
   },
 
   /**
    * Cria as tabelas do banco de dados
    */
-  createTables: function () {
-    const tables = [
+  createTables: async function () {
+    const tablesSQLite = [
       `CREATE TABLE IF NOT EXISTS professores (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT NOT NULL,
@@ -173,13 +187,108 @@ const Database = {
       )`
     ];
 
-    tables.forEach((tableSQL, index) => {
-      this.db.run(tableSQL, (err) => {
-        if (err) {
-          console.error(`Erro ao criar tabela ${index + 1}:`, err.message);
+    const tablesPostgreSQL = [
+      `CREATE TABLE IF NOT EXISTS professores (
+        id SERIAL PRIMARY KEY,
+        nome TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        telefone TEXT,
+        especialidade TEXT,
+        limite_alunos INTEGER DEFAULT 5,
+        porcentagem_repassa INTEGER DEFAULT 70,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS alunos (
+        id SERIAL PRIMARY KEY,
+        nome TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        telefone TEXT,
+        data_nascimento TEXT,
+        instrumento_principal TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_configuradas (
+        id SERIAL PRIMARY KEY,
+        instrumento TEXT NOT NULL,
+        turno TEXT NOT NULL CHECK(turno IN ('manhã', 'tarde', 'noite')),
+        professor_id INTEGER NOT NULL,
+        data_inicio TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (professor_id) REFERENCES professores (id)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_dias_semana (
+        id SERIAL PRIMARY KEY,
+        aula_id INTEGER NOT NULL,
+        dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
+        UNIQUE(aula_id, dia_semana)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_alunos (
+        id SERIAL PRIMARY KEY,
+        aula_id INTEGER NOT NULL,
+        aluno_id INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
+        FOREIGN KEY (aluno_id) REFERENCES alunos (id) ON DELETE CASCADE,
+        UNIQUE(aula_id, aluno_id)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_agendadas (
+          id SERIAL PRIMARY KEY,
+          aula_configurada_id INTEGER NOT NULL,
+          data_aula DATE NOT NULL,
+          status TEXT DEFAULT 'agendada' CHECK(status IN ('agendada', 'cancelada', 'realizada', 'reagendada')),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (aula_configurada_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
+          UNIQUE(aula_configurada_id, data_aula)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_reagendamentos (
+          id SERIAL PRIMARY KEY,
+          aula_agendada_id INTEGER NOT NULL,
+          nova_data DATE NOT NULL,
+          motivo TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (aula_agendada_id) REFERENCES aulas_agendadas (id) ON DELETE CASCADE
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS pagamentos (
+        id SERIAL PRIMARY KEY,
+        aluno_id INTEGER,
+        valor REAL NOT NULL,
+        data_vencimento TEXT,
+        data_pagamento TEXT,
+        status TEXT DEFAULT 'pendente',
+        valor_repasse REAL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (aluno_id) REFERENCES alunos (id)
+      )`
+    ];
+
+    try {
+      if (this.isPostgreSQL) {
+        for (const tableSQL of tablesPostgreSQL) {
+          await this.db.query(tableSQL);
         }
-      });
-    });
+      } else {
+        for (const tableSQL of tablesSQLite) {
+          this.db.run(tableSQL);
+        }
+      }
+      console.log('Tabelas verificadas/criadas com sucesso');
+    } catch (err) {
+      console.error('Erro ao criar tabelas:', err);
+    }
   },
 
   /**
@@ -189,15 +298,18 @@ const Database = {
    * @returns {Promise} Promise com o resultado
    */
   run: function (sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.run(sql, params, function (err) {
-        if (err) {
-          reject(err);
-        } else {
-          resolve({ id: this.lastID, changes: this.changes });
-        }
+    if (this.isPostgreSQL) {
+      return this.db.query(sql, params)
+        .then(result => ({ id: result.rows[0]?.id, changes: result.rowCount }))
+        .catch(err => { throw err; });
+    } else {
+      return new Promise((resolve, reject) => {
+        this.db.run(sql, params, function (err) {
+          if (err) reject(err);
+          else resolve({ id: this.lastID, changes: this.changes });
+        });
       });
-    });
+    }
   },
 
   /**
@@ -207,15 +319,18 @@ const Database = {
    * @returns {Promise} Promise com o resultado
    */
   get: function (sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(row);
-        }
+    if (this.isPostgreSQL) {
+      return this.db.query(sql, params)
+        .then(result => result.rows[0])
+        .catch(err => { throw err; });
+    } else {
+      return new Promise((resolve, reject) => {
+        this.db.get(sql, params, (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
       });
-    });
+    }
   },
 
   /**
@@ -225,15 +340,18 @@ const Database = {
    * @returns {Promise} Promise com o resultado
    */
   all: function (sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.all(sql, params, (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(rows);
-        }
+    if (this.isPostgreSQL) {
+      return this.db.query(sql, params)
+        .then(result => result.rows)
+        .catch(err => { throw err; });
+    } else {
+      return new Promise((resolve, reject) => {
+        this.db.all(sql, params, (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        });
       });
-    });
+    }
   }
 };
 
@@ -303,7 +421,7 @@ const Utils = {
 const GenericHandlers = {
   /**
    * Cria handlers CRUD genéricos para uma entidade
-   * @param {string} entityName - Nome da entidade (singular)
+   * @param {string} entityName - Nime da entidade (singular)
    * @param {string} tableName - Nome da tabela no banco
    * @param {Array} fields - Campos permitidos para criação/atualização
    * @param {Object} validations - Validações específicas por campo
@@ -549,12 +667,16 @@ const AulasHandlers = {
    */
   listarConfiguradas: async (req, res) => {
     try {
-      // Substitua a query atual por esta:
+      // Ajustar a query para funcionar em ambos os bancos
+      const isPostgreSQL = Database.isPostgreSQL;
+      const groupConcatFunction = isPostgreSQL ? 'STRING_AGG' : 'GROUP_CONCAT';
+      const groupConcatParams = isPostgreSQL ? 'DISTINCT ads.dia_semana::text, \',\')' : 'DISTINCT ads.dia_semana';
+
       const query = `
         SELECT 
           ac.*,
           p.nome as professor_nome,
-          GROUP_CONCAT(DISTINCT ads.dia_semana ORDER BY ads.dia_semana) as dias_semana,
+          ${groupConcatFunction}(${groupConcatParams}) as dias_semana,
           COUNT(DISTINCT aa.aluno_id) as total_alunos,
           COUNT(DISTINCT ag.id) as total_agendadas,
           SUM(CASE WHEN ag.status = 'cancelada' THEN 1 ELSE 0 END) as total_canceladas
@@ -563,7 +685,7 @@ const AulasHandlers = {
         LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
         LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
         LEFT JOIN aulas_agendadas ag ON ac.id = ag.aula_configurada_id
-        GROUP BY ac.id
+        GROUP BY ac.id ${isPostgreSQL ? ', p.nome' : ''}
         ORDER BY ac.created_at DESC
       `;
 
@@ -706,18 +828,23 @@ const AulasHandlers = {
     try {
       const { alunoId } = req.params;
 
+      // Ajustar a query para funcionar em ambos os bancos
+      const isPostgreSQL = Database.isPostgreSQL;
+      const groupConcatFunction = isPostgreSQL ? 'STRING_AGG' : 'GROUP_CONCAT';
+      const groupConcatParams = isPostgreSQL ? 'ads.dia_semana::text, \',\')' : 'ads.dia_semana';
+
       const query = `
         SELECT 
           ac.*,
           p.nome as professor_nome,
           p.especialidade as professor_especialidade,
-          GROUP_CONCAT(ads.dia_semana) as dias_semana
+          ${groupConcatFunction}(${groupConcatParams}) as dias_semana
         FROM aulas_alunos aa
         LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id
         LEFT JOIN professores p ON ac.professor_id = p.id
         LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
         WHERE aa.aluno_id = ?
-        GROUP BY ac.id
+        GROUP BY ac.id ${isPostgreSQL ? ', p.nome, p.especialidade' : ''}
         ORDER BY ac.created_at DESC
       `;
 
@@ -744,10 +871,15 @@ const AulasHandlers = {
     try {
       const { professorId } = req.params;
 
+      // Ajustar a query para funcionar em ambos os bancos
+      const isPostgreSQL = Database.isPostgreSQL;
+      const groupConcatFunction = isPostgreSQL ? 'STRING_AGG' : 'GROUP_CONCAT';
+      const groupConcatParams = isPostgreSQL ? 'ads.dia_semana::text, \',\')' : 'ads.dia_semana';
+
       const query = `
         SELECT 
           ac.*,
-          GROUP_CONCAT(ads.dia_semana) as dias_semana,
+          ${groupConcatFunction}(${groupConcatParams}) as dias_semana,
           COUNT(aa.aluno_id) as total_alunos
         FROM aulas_configuradas ac
         LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
@@ -1345,11 +1477,16 @@ app.post('/api/financeiro/:id/pagar', FinanceiroHandlers.processarPagamento);
 
 app.get('/api/relatorios/resumo', async (req, res) => {
   try {
+    const isPostgreSQL = Database.isPostgreSQL;
+
+    // Consultas compatíveis com ambos os bancos
     const queries = {
       totalAlunos: 'SELECT COUNT(*) as total FROM alunos',
       totalProfessores: 'SELECT COUNT(*) as total FROM professores',
       totalAulasConfiguradas: 'SELECT COUNT(*) as total FROM aulas_configuradas',
-      receitaMensal: 'SELECT SUM(valor) as total FROM pagamentos WHERE status = "pago" AND strftime("%Y-%m", data_pagamento) = strftime("%Y-%m", "now")'
+      receitaMensal: isPostgreSQL
+        ? `SELECT SUM(valor) as total FROM pagamentos WHERE status = 'pago' AND EXTRACT(YEAR FROM data_pagamento) = EXTRACT(YEAR FROM NOW()) AND EXTRACT(MONTH FROM data_pagamento) = EXTRACT(MONTH FROM NOW())`
+        : `SELECT SUM(valor) as total FROM pagamentos WHERE status = 'pago' AND strftime('%Y', data_pagamento) = strftime('%Y', 'now') AND strftime('%m', data_pagamento) = strftime('%m', 'now')`
     };
 
     const results = {};
