@@ -139,13 +139,13 @@ const Utils = {
     const firstDay = new Date(date);
     const lastDay = new Date(date);
 
-    // Ajusta para segunda-feira
-    const day = firstDay.getDay();
-    const diff = firstDay.getDate() - day + (day === 0 ? -6 : 1);
-    firstDay.setDate(diff);
+    // Ajusta para domingo (primeiro dia da semana)
+    const day = firstDay.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+    const diffToSunday = firstDay.getDate() - day;
+    firstDay.setDate(diffToSunday);
 
-    // Ajusta para domingo
-    lastDay.setDate(firstDay.getDate() + 6);
+    // Ajusta para sábado (último dia da semana)
+    lastDay.setDate(diffToSunday + 6);
 
     return { firstDay, lastDay };
   },
@@ -170,6 +170,50 @@ const Utils = {
     const result = new Date(date);
     result.setDate(result.getDate() + days);
     return result;
+  },
+
+  toggleTheme: () => {
+    const html = document.documentElement;
+    const currentTheme = html.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+    html.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+  },
+
+  updateThemeIcon: (currentTheme) => {
+    return currentTheme === 'dark' ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
+  },
+
+  verifyTheme: () => {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+
+    // Adicionar botão de toggle de tema
+    const themeToggleBtn = document.createElement('button');
+    themeToggleBtn.className = 'theme-toggle';
+
+    themeToggleBtn.innerHTML = Utils.updateThemeIcon(savedTheme);
+    themeToggleBtn.addEventListener('click', Utils.toggleTheme);
+
+    // Adicionar ao header
+    const headerActions = document.querySelector('.header-actions');
+    if (headerActions) {
+      headerActions.appendChild(themeToggleBtn);
+    }
+
+    // Atualizar ícone conforme o tema
+    function updateThemeIcon() {
+      const currentTheme = document.documentElement.getAttribute('data-theme');
+      themeToggleBtn.innerHTML = Utils.updateThemeIcon(currentTheme);
+    }
+
+    // Observar mudanças no tema
+    const observer = new MutationObserver(updateThemeIcon);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
   }
 };
 
@@ -725,12 +769,11 @@ const ModalSystem = {
                             <input type="date" id="data_inicio" class="form-control" required>
                         </div>
                         <div class="form-group">
-                            <label>Dias da Semana</label>
-                            <div class="dias-semana-container" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
-                                <label><input type="checkbox" name="dias_semana" value="1"> Segunda</label>
-                                <label><input type="checkbox" name="dias_semana" value="2"> Terça</label>
-                                <label><input type="checkbox" name="dias_semana" value="3"> Quarta</label>
-                                <label><input type="checkbox" name="dias_semana" value="4"> Quinta</label>
+                            <div class="dias-semana-container" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+                                <label>Segunda<input type="checkbox" name="dias_semana" value="1"></label>
+                                <label>Terça<input type="checkbox" name="dias_semana" value="2"></label>
+                                <label>Quarta<input type="checkbox" name="dias_semana" value="3"></label>
+                                <label>Quinta<input type="checkbox" name="dias_semana" value="4"></label>
                             </div>
                         </div>
                     `,
@@ -1202,7 +1245,7 @@ const DashboardSystem = {
    * @returns {Object} Estrutura de agenda organizada por dia e turno
    */
   processarAulasParaAgenda: (aulas) => {
-    const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
     const turnos = ['manhã', 'tarde', 'noite'];
 
     // Inicializar a agenda
@@ -1240,7 +1283,7 @@ const DashboardSystem = {
     const agendaContainer = DomElements.agendaContainer;
     if (!agendaContainer) return;
 
-    const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
     const turnos = ['manhã', 'tarde', 'noite'];
 
     let tableHTML = `
@@ -1396,7 +1439,7 @@ const DashboardSystem = {
    * @returns {string} HTML con los detalles del aula
    */
   renderAulaDetalhes: (aula) => {
-    const diasSemanaMap = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasSemanaMap = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
     const diasSemana = aula.dias_semana ? aula.dias_semana.map(dia => diasSemanaMap[dia]).join(', ') : '';
     const alunosAula = aula.alunos ? aula.alunos.split(',').map(aluno => aluno.trim()) : [];
 
@@ -2022,6 +2065,7 @@ const setupEventListeners = () => {
  * Inicializa a aplicação
  */
 const initApp = async () => {
+  Utils.verifyTheme()
   // Mostra o loader
   if (DomElements.loader) DomElements.loader.style.display = 'flex';
   if (DomElements.loginContainer) DomElements.loginContainer.style.display = 'none';
