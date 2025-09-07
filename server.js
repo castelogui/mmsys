@@ -58,6 +58,8 @@ const Database = {
    * Inicializa a conexão com o banco de dados
    */
   initialize: async function () {
+    console.log(`Inicializando banco de dados. Modo: ${this.isPostgreSQL ? 'PostgreSQL' : 'SQLite'}`);
+    
     if (this.isPostgreSQL) {
       // Configuração PostgreSQL para produção
       const { Client } = require('pg');
