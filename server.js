@@ -9,6 +9,8 @@ const fs = require('fs');
 // ==============================================================
 // CONFIGURAÇÕES E INICIALIZAÇÃO
 // ==============================================================
+const PORT = process.env.PORT || 3000;
+PORT == 3000 ? require('dotenv').config() : '';
 
 const app = express();
 
@@ -1592,7 +1594,6 @@ module.exports = app;
 
 // Se não estivermos na Vercel, iniciamos o servidor normalmente
 if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log(`Acesse: http://localhost:${PORT}`);
