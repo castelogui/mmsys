@@ -1,34 +1,47 @@
 :root {
   /* Cores base - Tema Light (padrão) */
-  --primary: #2563eb;       /* Azul vibrante moderno */
-  --primary-dark: #1d4ed8;  /* Azul mais escuro */
-  --primary-light: #3b82f6; /* Azul mais claro */
-  --secondary: #6366f1;     /* Azul indigo para contrastes */
-  --accent: #0f172a;        /* Azul quase preto para texto */
-  --background: #ffffff;    /* Branco puro */
-  --surface: #f8fafc;       /* Branco azulado muito claro */
-  --text-primary: #1e293b;  /* Azul escuro para texto */
-  --text-secondary: #64748b; /* Azul cinza para texto secundário */
-  --error: #ef4444;         /* Vermelho para erros */
-  --success: #10b981;       /* Verde para sucesso */
-  --warning: #f59e0b;       /* Amarelo para avisos */
-  --info: #06b6d4;          /* Ciano para informações */
-  
+  --primary: #2563eb;
+  /* Azul vibrante moderno */
+  --primary-dark: #1d4ed8;
+  /* Azul mais escuro */
+  --primary-light: #3b82f6;
+  /* Azul mais claro */
+  --secondary: #6366f1;
+  /* Azul indigo para contrastes */
+  --accent: #0f172a;
+  /* Azul quase preto para texto */
+  --background: #ffffff;
+  /* Branco puro */
+  --surface: #f8fafc;
+  /* Branco azulado muito claro */
+  --text-primary: #1e293b;
+  /* Azul escuro para texto */
+  --text-secondary: #64748b;
+  /* Azul cinza para texto secundário */
+  --error: #ef4444;
+  /* Vermelho para erros */
+  --success: #10b981;
+  /* Verde para sucesso */
+  --warning: #f59e0b;
+  /* Amarelo para avisos */
+  --info: #06b6d4;
+  /* Ciano para informações */
+
   /* Cores de estado */
   --hover-overlay: rgba(37, 99, 235, 0.1);
   --focus-overlay: rgba(37, 99, 235, 0.2);
-  
+
   /* Cores de componentes */
   --border-color: #60a4fd;
   --shadow-color: rgba(0, 0, 0, 0.1);
   --card-shadow: 0 4px 12px var(--shadow-color);
-  
+
   /* Gradientes modernos */
   --gradient-primary: linear-gradient(135deg, var(--primary-light) 0%, var(--primary) 50%, var(--primary-dark) 100%);
   --gradient-secondary: linear-gradient(135deg, var(--secondary) 0%, #818cf8 100%);
   --gradient-background: linear-gradient(135deg, #f0f9ff 0%, #f8fafc 100%);
   --gradient-card: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  
+
   /* Tamanhos e espaçamentos */
   --border-radius: 12px;
   --spacing-xs: 4px;
@@ -40,29 +53,42 @@
 
 /* Tema Dark */
 [data-theme="dark"] {
-  --primary: #2563eb;       /* Azul vibrante */
-  --primary-dark: #1220a0;  /* Azul mais escuro */
-  --primary-light: #3872f0; /* Azul mais claro */
-  --secondary: #818cf8;     /* Azul indigo mais claro */
-  --accent: #f1f5f9;        /* Quase branco para texto */
-  --background: #0f172a;    /* Azul muito escuro */
-  --surface: #1e293b;       /* Azul escuro para superfícies */
-  --text-primary: #f1f5f9;  /* Texto claro */
-  --text-secondary: #94a3b8; /* Texto cinza azulado */
-  --error: #f87171;         /* Vermelho claro para erros */
-  --success: #34d399;       /* Verde claro para sucesso */
-  --warning: #fbbf24;       /* Amarelo claro para avisos */
-  --info: #22d3ee;          /* Ciano claro para informações */
-  
+  --primary: #2563eb;
+  /* Azul vibrante */
+  --primary-dark: #1220a0;
+  /* Azul mais escuro */
+  --primary-light: #3872f0;
+  /* Azul mais claro */
+  --secondary: #818cf8;
+  /* Azul indigo mais claro */
+  --accent: #f1f5f9;
+  /* Quase branco para texto */
+  --background: #0f172a;
+  /* Azul muito escuro */
+  --surface: #1e293b;
+  /* Azul escuro para superfícies */
+  --text-primary: #f1f5f9;
+  /* Texto claro */
+  --text-secondary: #94a3b8;
+  /* Texto cinza azulado */
+  --error: #f87171;
+  /* Vermelho claro para erros */
+  --success: #34d399;
+  /* Verde claro para sucesso */
+  --warning: #fbbf24;
+  /* Amarelo claro para avisos */
+  --info: #22d3ee;
+  /* Ciano claro para informações */
+
   /* Cores de estado */
   --hover-overlay: rgba(59, 130, 246, 0.15);
   --focus-overlay: rgba(59, 130, 246, 0.25);
-  
+
   /* Cores de componentes */
   --border-color: #283a63;
   --shadow-color: rgba(0, 0, 0, 0.4);
   --card-shadow: 0 1px 3px var(--shadow-color);
-  
+
   /* Gradientes modernos para dark mode */
   --gradient-primary: linear-gradient(135deg, var(--primary-dark) 0%, var(--primary) 50%, var(--primary-light) 100%);
   --gradient-secondary: linear-gradient(135deg, var(--secondary) 0%, #a5b4fc 100%);
@@ -663,7 +689,7 @@ table td {
   }
 
   .stats {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   }
 
   .section-header {
@@ -691,7 +717,7 @@ table td {
 }
 
 /* Dispositivos móveis (até 576px) */
-@media (max-width: 576px) {
+@media (max-width: 768px) {
   .login-form {
     padding: var(--spacing-lg);
   }
@@ -1133,8 +1159,13 @@ table td {
 }
 
 @keyframes spin {
-  0% { transform: rotate(0deg);}
-  100% { transform: rotate(360deg);}
+  0% {
+    transform: rotate(0deg);
+  }
+
+  100% {
+    transform: rotate(360deg);
+  }
 }
 
 /* Toggle de tema */
@@ -1154,4 +1185,145 @@ table td {
 
 .theme-toggle i {
   font-size: 20px;
+}
+
+.dashboard-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+.card {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  text-align: center;
+}
+
+.card h3 {
+  margin-top: 0;
+  color: #333;
+}
+
+.card p {
+  font-size: 24px;
+  font-weight: bold;
+  color: #4361ee;
+  margin: 10px 0 0;
+}
+
+.week-navigation {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  background: white;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.week-navigation button {
+  background: #4361ee;
+  color: white;
+  border: none;
+  padding: 10px 15px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.week-navigation button:hover {
+  background: #3a0ca3;
+}
+
+.week-navigation span {
+  font-weight: bold;
+  font-size: 18px;
+}
+
+.agenda-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.agenda-table th,
+.agenda-table td {
+  border: 1px solid #ddd;
+  padding: 12px;
+  text-align: center;
+}
+
+.agenda-table th {
+  background-color: #4361ee;
+  color: white;
+  font-weight: bold;
+}
+
+.agenda-table td {
+  height: 80px;
+  vertical-align: top;
+}
+
+.agenda-cell {
+  cursor: pointer;
+  transition: background-color 0.2s;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.agenda-cell:hover {
+  background-color: #f0f0f0;
+}
+
+.aula-item {
+  background: #4cc9f0;
+  color: white;
+  padding: 5px;
+  border-radius: 4px;
+  margin: 2px 0;
+  font-size: 12px;
+  width: 100%;
+  text-align: center;
+  cursor: pointer;
+}
+
+.aula-item:hover {
+  background: #3a0ca3;
+}
+
+.aula-detalhe {
+  border: 1px solid #ddd;
+  padding: 15px;
+  margin-bottom: 15px;
+  border-radius: 8px;
+}
+
+.professor-selector {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+.professor-btn {
+  background: #4361ee;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.professor-btn.active {
+  background: #3a0ca3;
 }

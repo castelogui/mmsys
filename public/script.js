@@ -13,10 +13,9 @@ const AppState = {
   currentUser: null,
   currentSection: 'dashboard',
   editingId: null,
-  revenueChartInstance: null,
-  instrumentsChartInstance: null,
   currentEntity: '',
-  currentAction: ''
+  currentAction: '',
+  currentWeek: new Date()
 };
 
 // Cache de elementos DOM
@@ -28,7 +27,11 @@ const DomElements = {
   contentArea: document.getElementById('contentArea'),
   addButton: document.getElementById('addButton'),
   searchInput: document.getElementById('searchInput'),
-  toastContainer: document.getElementById('toast-container')
+  toastContainer: document.getElementById('toast-container'),
+  agendaContainer: document.getElementById('agendaContainer'),
+  weekDisplay: document.getElementById('weekDisplay'),
+  prevWeekBtn: document.getElementById('prevWeekBtn'),
+  nextWeekBtn: document.getElementById('nextWeekBtn')
 };
 
 // ==============================================================
@@ -125,6 +128,48 @@ const Utils = {
       'relatorios': 'Relatórios'
     };
     return titles[section] || 'Dashboard';
+  },
+
+  /**
+   * Obtém o primeiro e último dia da semana para uma data
+   * @param {Date} date - Data de referência
+   * @returns {Object} Objeto com firstDay e lastDay
+   */
+  getWeekRange: (date) => {
+    const firstDay = new Date(date);
+    const lastDay = new Date(date);
+
+    // Ajusta para segunda-feira
+    const day = firstDay.getDay();
+    const diff = firstDay.getDate() - day + (day === 0 ? -6 : 1);
+    firstDay.setDate(diff);
+
+    // Ajusta para domingo
+    lastDay.setDate(firstDay.getDate() + 6);
+
+    return { firstDay, lastDay };
+  },
+
+  /**
+   * Formata o intervalo de datas para exibição
+   * @param {Date} start - Data inicial
+   * @param {Date} end - Data final
+   * @returns {string} String formatada
+   */
+  formatWeekRange: (start, end) => {
+    return `${Utils.formatDate(start)} a ${Utils.formatDate(end)}`;
+  },
+
+  /**
+   * Adiciona dias a uma data
+   * @param {Date} date - Data base
+   * @param {number} days - Número de dias a adicionar
+   * @returns {Date} Nova data
+   */
+  addDays: (date, days) => {
+    const result = new Date(date);
+    result.setDate(result.getDate() + days);
+    return result;
   }
 };
 
@@ -441,10 +486,8 @@ const TableSystem = {
                         `;
 
       case 'aulas':
-        const diasSemanaMap = ['Domingo','Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+        const diasSemanaMap = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
         const diasSemana = item.dias_semana ? item.dias_semana.map(dia => diasSemanaMap[dia]).join(', ') : '';
-        console.log(item.dias_semana, diasSemana);
-        
 
         return `
                             <td>${item.instrumento}</td>
@@ -906,10 +949,6 @@ const NavigationSystem = {
    * @param {string} section - Nome da seção
    */
   changeSection: (section) => {
-    if (AppState.currentSection === 'dashboard') {
-      DashboardSystem.destroyCharts()
-    }
-
     AppState.currentSection = section;
 
     // Atualizar menu ativo
@@ -1077,7 +1116,7 @@ const AuthSystem = {
 // ==============================================================
 
 /**
- * Sistema do dashboard e gráficos
+ * Sistema do dashboard com agenda semanal
  */
 const DashboardSystem = {
   /**
@@ -1092,94 +1131,271 @@ const DashboardSystem = {
       document.getElementById('totalAulasConfiguradas').textContent = data.totalAulasConfiguradas || '0';
       document.getElementById('receitaMensal').textContent = Utils.formatCurrency(data.receitaMensal);
 
-      // Gerar gráficos
-      DashboardSystem.generateCharts();
+      // Carregar a agenda semanal
+      DashboardSystem.loadAgenda();
     } catch (error) {
       console.error('Erro ao carregar dados do dashboard:', error);
       ToastSystem.show('Erro ao carregar dados do dashboard', 'error');
     }
   },
 
-  destroyCharts: () => {
-    if (AppState.revenueChartInstance) {
-      AppState.revenueChartInstance.destroy();
-      AppState.revenueChartInstance = null;
-    }
-    if (AppState.instrumentsChartInstance) {
-      AppState.instrumentsChartInstance.destroy();
-      AppState.instrumentsChartInstance = null;
+  /**
+   * Carrega a agenda semanal
+   */
+  loadAgenda: async () => {
+    try {
+      const data = await ApiService.request('/aulas/configuradas');
+      const aulas = data.aulas || data;
+
+      // Processar as aulas para a agenda
+      const agenda = DashboardSystem.processarAulasParaAgenda(aulas);
+
+      // Renderizar a tabela de agenda
+      DashboardSystem.renderAgenda(agenda);
+
+      // Atualizar o display da semana
+      DashboardSystem.updateWeekDisplay();
+    } catch (error) {
+      console.error('Erro ao carregar agenda:', error);
+      ToastSystem.show('Erro ao carregar agenda', 'error');
     }
   },
 
   /**
-   * Gera os gráficos do dashboard
+   * Processa as aulas para a estrutura de agenda
+   * @param {Array} aulas - Lista de aulas
+   * @returns {Object} Estrutura de agenda organizada por dia e turno
    */
-  generateCharts: () => {
-    // Verificar se Chart.js está disponível
-    if (typeof Chart === 'undefined') {
-      console.warn('Chart.js não está carregado. Gráficos não serão renderizados.');
-      return;
-    }
+  processarAulasParaAgenda: (aulas) => {
+    const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const turnos = ['manhã', 'tarde', 'noite'];
 
-    // Destruir gráficos existentes    
-    DashboardSystem.destroyCharts();
+    // Inicializar a agenda
+    let agenda = {};
+    diasDaSemana.forEach(dia => {
+      agenda[dia] = {};
+      turnos.forEach(turno => {
+        agenda[dia][turno] = [];
+      });
+    });
 
-    // Gráfico de receita (dados estáticos para exemplo)
-    const revenueCtx = document.getElementById('revenueChart')?.getContext('2d');
-    if (revenueCtx) {
-      AppState.revenueChartInstance = new Chart(revenueCtx, {
-        type: 'line',
-        data: {
-          labels: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun'],
-          datasets: [{
-            label: 'Receita Mensal (R$)',
-            data: [22000, 23400, 25800, 24100, 27200, 28540],
-            borderColor: '#4361ee',
-            backgroundColor: 'rgba(67, 97, 238, 0.1)',
-            tension: 0.3,
-            fill: true
-          }]
-        },
-        options: {
-          responsive: true,
-          plugins: {
-            legend: {
-              position: 'top',
-            }
-          }
+    // Preencher a agenda com as aulas
+    aulas.forEach(aula => {
+      // Certificar que dias_semana é um array
+      const diasAula = Array.isArray(aula.dias_semana) ? aula.dias_semana : [];
+
+      diasAula.forEach(diaIndex => {
+        const dia = diasDaSemana[diaIndex];
+        const turno = aula.turno;
+
+        if (agenda[dia] && agenda[dia][turno]) {
+          agenda[dia][turno].push(aula);
         }
       });
-    }
+    });
 
-    // Gráfico de instrumentos
-    const instrumentsCtx = document.getElementById('instrumentsChart')?.getContext('2d');
-    if (instrumentsCtx) {
-      AppState.instrumentsChartInstance = new Chart(instrumentsCtx, {
-        type: 'doughnut',
-        data: {
-          labels: ['Piano', 'Guitarra', 'Violino', 'Bateria', 'Canto', 'Outros'],
-          datasets: [{
-            data: [35, 28, 15, 12, 8, 2],
-            backgroundColor: [
-              '#4361ee',
-              '#3a0ca3',
-              '#4cc9f0',
-              '#f72585',
-              '#fca311',
-              '#6c757d'
-            ]
-          }]
-        },
-        options: {
-          responsive: true,
-          plugins: {
-            legend: {
-              position: 'right',
-            }
-          }
+    return agenda;
+  },
+
+  /**
+   * Renderiza a tabela de agenda
+   * @param {Object} agenda - Estrutura de agenda organizada por dia e turno
+   */
+  renderAgenda: (agenda) => {
+    const agendaContainer = DomElements.agendaContainer;
+    if (!agendaContainer) return;
+
+    const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const turnos = ['manhã', 'tarde', 'noite'];
+
+    let tableHTML = `
+      <table class="agenda-table">
+        <thead>
+          <tr>
+            <th>Horário</th>
+            ${diasDaSemana.map(dia => `<th>${dia}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+    `;
+
+    // Para cada turno, criar uma linha
+    turnos.forEach(turno => {
+      tableHTML += `<tr><td>${turno}</td>`;
+
+      // Para cada dia da semana, criar uma célula
+      diasDaSemana.forEach(dia => {
+        const aulasNoDiaETurno = agenda[dia] && agenda[dia][turno] ? agenda[dia][turno] : [];
+
+        tableHTML += `<td>
+          <div class="agenda-cell" data-dia="${dia}" data-turno="${turno}">`;
+
+        if (aulasNoDiaETurno.length > 0) {
+          aulasNoDiaETurno.forEach(aula => {
+            tableHTML += `
+              <div class="aula-item" data-aula-id="${aula.id}">
+                <strong>${aula.instrumento}</strong> - ${aula.professor_nome}
+              </div>
+            `;
+          });
+        } else {
+          tableHTML += `-`;
+        }
+
+        tableHTML += `</div></td>`;
+      });
+
+      tableHTML += `</tr>`;
+    });
+
+    tableHTML += `</tbody></table>`;
+    agendaContainer.innerHTML = tableHTML;
+
+    // Adicionar event listeners para as células
+    document.querySelectorAll('.agenda-cell').forEach(cell => {
+      cell.addEventListener('click', (e) => {
+        const dia = cell.getAttribute('data-dia');
+        const turno = cell.getAttribute('data-turno');
+        const aulas = agenda[dia][turno];
+
+        if (aulas.length > 0) {
+          DashboardSystem.showModalAgenda(dia, turno, aulas);
         }
       });
+    });
+  },
+
+  /**
+   * Mostra o modal com as aulas de um horário específico
+   * @param {string} dia - Dia da semana
+   * @param {string} turno - Turno (manhã, tarde, noite)
+   * @param {Array} aulas - Lista de aulas para esse horário
+   */
+  showModalAgenda: (dia, turno, aulas) => {
+    // Criar modal para mostrar as aulas do horário
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2>Aulas de ${dia} - ${turno}</h2>
+        
+        ${aulas.length > 1 ? `
+        <div class="professor-selector" id="professorSelector">
+          ${aulas.map((aula, index) => `
+            <button class="professor-btn ${index === 0 ? 'active' : ''}" 
+                    data-aula-id="${aula.id}">
+              ${aula.professor_nome}
+            </button>
+          `).join('')}
+        </div>
+        ` : ''}
+        
+        <div id="aulaDetalhes">
+          ${aulas.length > 0 ? DashboardSystem.renderAulaDetalhes(aulas[0]) : ''}
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+    modal.style.display = 'flex';
+
+    // Fechar modal
+    modal.querySelector('.close').addEventListener('click', () => {
+      document.body.removeChild(modal);
+    });
+
+    // Se houver múltiplas aulas, adicionar event listeners para os botões de professor
+    if (aulas.length > 1) {
+      const professorSelector = modal.querySelector('#professorSelector');
+
+      professorSelector.querySelectorAll('.professor-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          // Remover classe active de todos os botões
+          professorSelector.querySelectorAll('.professor-btn').forEach(b => {
+            b.classList.remove('active');
+          });
+
+          // Adicionar classe active ao botão clicado
+          btn.classList.add('active');
+
+          // Encontrar a aula correspondente
+          const aulaId = btn.getAttribute('data-aula-id');
+          const aula = aulas.find(a => a.id == aulaId);
+
+          // Atualizar os detalhes da aula
+          if (aula) {
+            const aulaDetalhes = modal.querySelector('#aulaDetalhes');
+            aulaDetalhes.innerHTML = DashboardSystem.renderAulaDetalhes(aula);
+          }
+        });
+      });
     }
+  },
+
+  /**
+   * Renderiza os detalhes de uma aula para o modal
+   * @param {Object} aula - Dados da aula
+   * @returns {string} HTML con los detalles del aula
+   */
+  renderAulaDetalhes: (aula) => {
+    const diasSemanaMap = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasSemana = aula.dias_semana ? aula.dias_semana.map(dia => diasSemanaMap[dia]).join(', ') : '';
+    // separar string de alunos para um array: "ritielen,dengo" => ["ritielen", "dengo"]
+    const alunosAula = aula.alunos ? aula.alunos.split(',').map(aluno => aluno.trim()) : [];
+
+    return `
+      <div class="aula-detalhe">
+        <h3>${aula.instrumento} - Prof. ${aula.professor_nome}</h3>
+        <p><strong>Dias da semana:</strong> ${diasSemana}</p>
+        <p><strong>Total de alunos:</strong> ${aula.total_alunos || 0}</p>
+        
+        <h4>Alunos Matriculados:</h4>
+        <ul>
+          ${alunosAula && alunosAula.length > 0 ?
+        alunosAula.map(aluno => `<li>${aluno}</li>`).join('') :
+        '<li>Nenhum aluno matriculado</li>'
+      }
+        </ul>
+        
+        <button class="btn btn-primary view-aula-btn" data-aula-id="${aula.id}">
+          Ver detalhes completos da aula
+        </button>
+      </div>
+    `;
+  },
+
+  /**
+   * Avança para a próxima semana
+   */
+  nextWeek: () => {
+    AppState.currentWeek = Utils.addDays(AppState.currentWeek, 7);
+    DashboardSystem.loadAgenda();
+  },
+
+  /**
+   * Volta para a semana anterior
+   */
+  prevWeek: () => {
+    AppState.currentWeek = Utils.addDays(AppState.currentWeek, -7);
+    DashboardSystem.loadAgenda();
+  },
+
+  /**
+   * Atualiza o display da semana atual
+   */
+  updateWeekDisplay: () => {
+    if (!DomElements.weekDisplay) return;
+
+    const { firstDay, lastDay } = Utils.getWeekRange(AppState.currentWeek);
+    DomElements.weekDisplay.textContent = `Semana: ${Utils.formatWeekRange(firstDay, lastDay)}`;
+  },
+
+  /**
+   * Destrói os gráficos (mantido para compatibilidade)
+   */
+  destroyCharts: () => {
+    // Esta função é mantida para compatibilidade, mas os gráficos foram removidos
   }
 };
 
@@ -1508,6 +1724,15 @@ const setupEventListeners = () => {
   ToastSystem.init();
   MobileMenuSystem.setup();
 
+  // Navegação de semana
+  if (DomElements.prevWeekBtn) {
+    DomElements.prevWeekBtn.addEventListener('click', DashboardSystem.prevWeek);
+  }
+
+  if (DomElements.nextWeekBtn) {
+    DomElements.nextWeekBtn.addEventListener('click', DashboardSystem.nextWeek);
+  }
+
   // Login
   const loginForm = document.getElementById('loginForm');
   if (loginForm) {
@@ -1583,16 +1808,17 @@ const setupEventListeners = () => {
  */
 const initApp = async () => {
   // Mostra o loader
-  loader.style.display = 'flex';
-  loginContainer.style.display = 'none';
-  mainSystem.style.display = 'none';
+  if (DomElements.loader) DomElements.loader.style.display = 'flex';
+  if (DomElements.loginContainer) DomElements.loginContainer.style.display = 'none';
+  if (DomElements.mainSystem) DomElements.mainSystem.style.display = 'none';
+
   // Verificar se há um token salvo
   const token = localStorage.getItem('authToken');
 
   // Testar conexão com API primeiro
   const apiConnected = await ApiService.testConnection();
 
-  loader.style.display = 'none';
+  if (DomElements.loader) DomElements.loader.style.display = 'none';
   if (token && apiConnected) {
     // Verificar se o token é válido
     AuthSystem.validateToken(token);
