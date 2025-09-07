@@ -7,35 +7,34 @@ const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const fs = require('fs');
 
+// ==============================================================
+// CONFIGURAÇÕES E INICIALIZAÇÃO
+// ==============================================================
+
 const app = express();
 
-// ==================== CONFIGURAÇÕES DE SEGURANÇA ====================
-
-// Helmet para headers de segurança
+// Configurações de segurança
 app.use(helmet());
-
-// CORS para permitir requisições de diferentes origens
 app.use(cors());
 
-// Rate limiting para prevenir ataques de força bruta
+// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 200 // limite de 100 requisições por IP a cada 15 minutos
+  windowMs: 5 * 60 * 1000,
+  max: 200
 });
 app.use(limiter);
 
 // Middlewares
 app.use(bodyParser.json({ limit: '10mb' }));
-// Servir arquivos estáticos - importante para a Vercel
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Log de todas as requisições
+// Log de requisições
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   next();
 });
 
-// ========== Configuração de Content Security Policy ========== 
+// Content Security Policy
 app.use((req, res, next) => {
   res.setHeader("Content-Security-Policy",
     "default-src 'self'; " +
@@ -48,288 +47,371 @@ app.use((req, res, next) => {
   next();
 });
 
-// ==================== CONEXÃO COM BANCO DE DADOS ====================
-// Na Vercel, usamos diretório temporário
-const dbPath = process.env.NODE_ENV === 'production' 
-  ? '/tmp/sqlite.db' 
-  : './database/sqlite.db';
+// ==============================================================
+// BANCO DE DADOS - MÓDULO
+// ==============================================================
 
-// Garantir que o diretório existe
-if (process.env.NODE_ENV !== 'production') {
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-}
+const Database = {
+  db: null,
+  dbPath: process.env.NODE_ENV === 'production'
+    ? '/tmp/sqlite.db'
+    : './database/sqlite.db',
 
-let db;
-
-// Função para inicializar o banco
-function initializeDatabase() {
-  db = new sqlite3.Database(dbPath, (err) => {
-    if (err) {
-      console.error('Erro ao conectar ao banco de dados:', err.message);
-    } else {
-      console.log('Conectado ao banco de dados SQLite.');
-      createTables();
+  /**
+   * Inicializa a conexão com o banco de dados
+   */
+  initialize: function () {
+    // Garantir que o diretório existe em ambiente de desenvolvimento
+    if (process.env.NODE_ENV !== 'production') {
+      const dir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
     }
-  });
-}
 
-// ==================== INICIALIZAÇÃO DO BANCO ====================
-
-function createTables() {
-  const tables = [
-    `CREATE TABLE IF NOT EXISTS professores (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      nome TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      telefone TEXT,
-      especialidade TEXT,
-      limite_alunos INTEGER DEFAULT 5,
-      porcentagem_repassa INTEGER DEFAULT 70,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
-
-    `CREATE TABLE IF NOT EXISTS alunos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      nome TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      telefone TEXT,
-      data_nascimento TEXT,
-      instrumento_principal TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
-
-    `CREATE TABLE IF NOT EXISTS aulas_configuradas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      instrumento TEXT NOT NULL,
-      turno TEXT NOT NULL CHECK(turno IN ('manhã', 'tarde', 'noite')),
-      professor_id INTEGER NOT NULL,
-      data_inicio TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (professor_id) REFERENCES professores (id)
-    )`,
-
-    `CREATE TABLE IF NOT EXISTS aulas_dias_semana (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      aula_id INTEGER NOT NULL,
-      dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-      UNIQUE(aula_id, dia_semana)
-    )`,
-
-    `CREATE TABLE IF NOT EXISTS aulas_alunos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      aula_id INTEGER NOT NULL,
-      aluno_id INTEGER NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-      FOREIGN KEY (aluno_id) REFERENCES alunos (id) ON DELETE CASCADE,
-      UNIQUE(aula_id, aluno_id)
-    )`,
-
-    `CREATE TABLE IF NOT EXISTS pagamentos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      aluno_id INTEGER,
-      valor REAL NOT NULL,
-      data_vencimento TEXT,
-      data_pagamento TEXT,
-      status TEXT DEFAULT 'pendente',
-      valor_repasse REAL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (aluno_id) REFERENCES alunos (id)
-    )`
-  ];
-
-  tables.forEach((tableSQL, index) => {
-    db.run(tableSQL, (err) => {
+    this.db = new sqlite3.Database(this.dbPath, (err) => {
       if (err) {
-        console.error(`Erro ao criar tabela ${index + 1}:`, err.message);
+        console.error('Erro ao conectar ao banco de dados:', err.message);
+      } else {
+        console.log('Conectado ao banco de dados SQLite.');
+        this.createTables();
       }
     });
-  });
-}
+
+    return this.db;
+  },
+
+  /**
+   * Cria as tabelas do banco de dados
+   */
+  createTables: function () {
+    const tables = [
+      `CREATE TABLE IF NOT EXISTS professores (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        telefone TEXT,
+        especialidade TEXT,
+        limite_alunos INTEGER DEFAULT 5,
+        porcentagem_repassa INTEGER DEFAULT 70,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS alunos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        telefone TEXT,
+        data_nascimento TEXT,
+        instrumento_principal TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_configuradas (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instrumento TEXT NOT NULL,
+        turno TEXT NOT NULL CHECK(turno IN ('manhã', 'tarde', 'noite')),
+        professor_id INTEGER NOT NULL,
+        data_inicio TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (professor_id) REFERENCES professores (id)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_dias_semana (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        aula_id INTEGER NOT NULL,
+        dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
+        UNIQUE(aula_id, dia_semana)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_alunos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        aula_id INTEGER NOT NULL,
+        aluno_id INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
+        FOREIGN KEY (aluno_id) REFERENCES alunos (id) ON DELETE CASCADE,
+        UNIQUE(aula_id, aluno_id)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS pagamentos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        aluno_id INTEGER,
+        valor REAL NOT NULL,
+        data_vencimento TEXT,
+        data_pagamento TEXT,
+        status TEXT DEFAULT 'pendente',
+        valor_repasse REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (aluno_id) REFERENCES alunos (id)
+      )`
+    ];
+
+    tables.forEach((tableSQL, index) => {
+      this.db.run(tableSQL, (err) => {
+        if (err) {
+          console.error(`Erro ao criar tabela ${index + 1}:`, err.message);
+        }
+      });
+    });
+  },
+
+  /**
+   * Executa uma query no banco de dados
+   * @param {string} sql - Query SQL
+   * @param {Array} params - Parâmetros da query
+   * @returns {Promise} Promise com o resultado
+   */
+  run: function (sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.run(sql, params, function (err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve({ id: this.lastID, changes: this.changes });
+        }
+      });
+    });
+  },
+
+  /**
+   * Executa uma query e retorna uma única linha
+   * @param {string} sql - Query SQL
+   * @param {Array} params - Parâmetros da query
+   * @returns {Promise} Promise com o resultado
+   */
+  get: function (sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.get(sql, params, (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
+  },
+
+  /**
+   * Executa uma query e retorna todas as linhas
+   * @param {string} sql - Query SQL
+   * @param {Array} params - Parâmetros da query
+   * @returns {Promise} Promise com o resultado
+   */
+  all: function (sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.all(sql, params, (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+  }
+};
 
 // Inicializar o banco de dados
-initializeDatabase();
+Database.initialize();
 
-// ==================== API GENÉRICA ====================
+// ==============================================================
+// UTILITÁRIOS
+// ==============================================================
 
-/**
- * Cria rotas CRUD genéricas para uma entidade
- * @param {string} entityName - Nome da entidade (singular)
- * @param {string} tableName - Nome da tabela no banco
- * @param {Array} fields - Campos permitidos para criação/atualização
- * @param {Object} validations - Validações específicas por campo
- */
-function createGenericRoutes(entityName, tableName, fields, validations = {}) {
-  const basePath = `/api/${entityName}s`;
+const Utils = {
+  /**
+   * Valida dados com base em regras específicas
+   * @param {Object} data - Dados a serem validados
+   * @param {Object} validations - Regras de validação
+   * @returns {Array} Lista de erros de validação
+   */
+  validateData: function (data, validations) {
+    const errors = [];
 
-  // GET all
-  app.get(basePath, (req, res) => {
-    const query = `SELECT * FROM ${tableName}`;
-
-    db.all(query, (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+    for (const [field, validation] of Object.entries(validations)) {
+      if (validation.required && !data[field]) {
+        errors.push(`O campo ${field} é obrigatório`);
       }
-      res.json({ [entityName + 's']: rows });
-    });
-  });
 
-  // GET by ID
-  app.get(`${basePath}/:id`, (req, res) => {
-    const { id } = req.params;
-
-    db.get(`SELECT * FROM ${tableName} WHERE id = ?`, [id], (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+      if (data[field] && validation.type && typeof data[field] !== validation.type) {
+        errors.push(`O campo ${field} deve ser do tipo ${validation.type}`);
       }
-      if (!row) {
-        return res.status(404).json({ error: `${entityName} não encontrado` });
-      }
-      res.json(row);
-    });
-  });
 
-  // POST - Create
-  app.post(basePath, (req, res) => {
-    // Filtrar apenas campos permitidos
-    console.log(req.body);
-    
-    const data = {};
-    fields.forEach(field => {
-      if (req.body[field] !== undefined) {
-        data[field] = req.body[field];
+      if (data[field] && validation.min && data[field] < validation.min) {
+        errors.push(`O campo ${field} deve ser no mínimo ${validation.min}`);
       }
-    });
 
-    // Validações
-    const validationErrors = validateData(data, validations);
-    if (validationErrors.length > 0) {
-      return res.status(400).json({ errors: validationErrors });
+      if (data[field] && validation.max && data[field] > validation.max) {
+        errors.push(`O campo ${field} deve ser no máximo ${validation.max}`);
+      }
+
+      if (data[field] && validation.pattern && !validation.pattern.test(data[field])) {
+        errors.push(`O campo ${field} está em um formato inválido`);
+      }
     }
 
-    const columns = Object.keys(data).join(', ');
-    const placeholders = Object.keys(data).map(() => '?').join(', ');
-    const values = Object.values(data);
+    return errors;
+  },
 
-    const query = `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`;
-
-    db.run(query, values, function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+  /**
+   * Filtra um objeto mantendo apenas as chaves permitidas
+   * @param {Object} data - Objeto a ser filtrado
+   * @param {Array} allowedFields - Campos permitidos
+   * @returns {Object} Objeto filtrado
+   */
+  filterObject: function (data, allowedFields) {
+    const filtered = {};
+    allowedFields.forEach(field => {
+      if (data[field] !== undefined) {
+        filtered[field] = data[field];
       }
-      res.status(201).json({
-        id: this.lastID,
-        message: `${entityName} criado com sucesso`
-      });
     });
-  });
-
-  // PUT - Update
-  app.put(`${basePath}/:id`, (req, res) => {
-    const { id } = req.params;
-
-    // Verificar se existe
-    db.get(`SELECT * FROM ${tableName} WHERE id = ?`, [id], (err, row) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      if (!row) {
-        return res.status(404).json({ error: `${entityName} não encontrado` });
-      }
-
-      // Filtrar apenas campos permitidos
-      const data = {};
-      fields.forEach(field => {
-        if (req.body[field] !== undefined) {
-          data[field] = req.body[field];
-        }
-      });
-
-      // Validações
-      const validationErrors = validateData(data, validations);
-      if (validationErrors.length > 0) {
-        return res.status(400).json({ errors: validationErrors });
-      }
-
-      if (Object.keys(data).length === 0) {
-        return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
-      }
-
-      const setClause = Object.keys(data).map(field => `${field} = ?`).join(', ');
-      const values = [...Object.values(data), id];
-
-      const query = `UPDATE ${tableName} SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
-
-      db.run(query, values, function (err) {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
-        res.json({
-          message: `${entityName} atualizado com sucesso`,
-          changes: this.changes
-        });
-      });
-    });
-  });
-
-  // DELETE
-  app.delete(`${basePath}/:id`, (req, res) => {
-    const { id } = req.params;
-
-    db.run(`DELETE FROM ${tableName} WHERE id = ?`, [id], function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: `${entityName} não encontrado` });
-      }
-      res.json({ message: `${entityName} excluído com sucesso` });
-    });
-  });
-}
-
-// Função de validação genérica
-function validateData(data, validations) {
-  const errors = [];
-
-  for (const [field, validation] of Object.entries(validations)) {
-    if (validation.required && !data[field]) {
-      errors.push(`O campo ${field} é obrigatório`);
-    }
-
-    if (data[field] && validation.type && typeof data[field] !== validation.type) {
-      errors.push(`O campo ${field} deve ser do tipo ${validation.type}`);
-    }
-
-    if (data[field] && validation.min && data[field] < validation.min) {
-      errors.push(`O campo ${field} deve ser no mínimo ${validation.min}`);
-    }
-
-    if (data[field] && validation.max && data[field] > validation.max) {
-      errors.push(`O campo ${field} deve ser no máximo ${validation.max}`);
-    }
-
-    if (data[field] && validation.pattern && !validation.pattern.test(data[field])) {
-      errors.push(`O campo ${field} está em um formato inválido`);
-    }
+    return filtered;
   }
+};
 
-  return errors;
-}
+// ==============================================================
+// HANDLERS GENÉRICOS PARA CRUD
+// ==============================================================
 
-// ==================== ROTAS GENÉRICAS ====================
+const GenericHandlers = {
+  /**
+   * Cria handlers CRUD genéricos para uma entidade
+   * @param {string} entityName - Nome da entidade (singular)
+   * @param {string} tableName - Nome da tabela no banco
+   * @param {Array} fields - Campos permitidos para criação/atualização
+   * @param {Object} validations - Validações específicas por campo
+   */
+  create: function (entityName, tableName, fields, validations = {}) {
+    return {
+      // GET all
+      getAll: async (req, res) => {
+        try {
+          const rows = await Database.all(`SELECT * FROM ${tableName}`);
+          res.json({ [entityName + 's']: rows });
+        } catch (err) {
+          res.status(500).json({ error: err.message });
+        }
+      },
+
+      // GET by ID
+      getById: async (req, res) => {
+        try {
+          const { id } = req.params;
+          const row = await Database.get(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
+
+          if (!row) {
+            return res.status(404).json({ error: `${entityName} não encontrado` });
+          }
+
+          res.json(row);
+        } catch (err) {
+          res.status(500).json({ error: err.message });
+        }
+      },
+
+      // POST - Create
+      create: async (req, res) => {
+        try {
+          const data = Utils.filterObject(req.body, fields);
+
+          // Validações
+          const validationErrors = Utils.validateData(data, validations);
+          if (validationErrors.length > 0) {
+            return res.status(400).json({ errors: validationErrors });
+          }
+
+          const columns = Object.keys(data).join(', ');
+          const placeholders = Object.keys(data).map(() => '?').join(', ');
+          const values = Object.values(data);
+
+          const result = await Database.run(
+            `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`,
+            values
+          );
+
+          res.status(201).json({
+            id: result.id,
+            message: `${entityName} criado com sucesso`
+          });
+        } catch (err) {
+          res.status(500).json({ error: err.message });
+        }
+      },
+
+      // PUT - Update
+      update: async (req, res) => {
+        try {
+          const { id } = req.params;
+
+          // Verificar se existe
+          const existing = await Database.get(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
+          if (!existing) {
+            return res.status(404).json({ error: `${entityName} não encontrado` });
+          }
+
+          // Filtrar apenas campos permitidos
+          const data = Utils.filterObject(req.body, fields);
+
+          // Validações
+          const validationErrors = Utils.validateData(data, validations);
+          if (validationErrors.length > 0) {
+            return res.status(400).json({ errors: validationErrors });
+          }
+
+          if (Object.keys(data).length === 0) {
+            return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
+          }
+
+          const setClause = Object.keys(data).map(field => `${field} = ?`).join(', ');
+          const values = [...Object.values(data), id];
+
+          const result = await Database.run(
+            `UPDATE ${tableName} SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            values
+          );
+
+          res.json({
+            message: `${entityName} atualizado com sucesso`,
+            changes: result.changes
+          });
+        } catch (err) {
+          res.status(500).json({ error: err.message });
+        }
+      },
+
+      // DELETE
+      delete: async (req, res) => {
+        try {
+          const { id } = req.params;
+          const result = await Database.run(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+
+          if (result.changes === 0) {
+            return res.status(404).json({ error: `${entityName} não encontrado` });
+          }
+
+          res.json({ message: `${entityName} excluído com sucesso` });
+        } catch (err) {
+          res.status(500).json({ error: err.message });
+        }
+      }
+    };
+  }
+};
+
+// ==============================================================
+// ROTAS GENÉRICAS
+// ==============================================================
 
 // Rotas para Alunos
-createGenericRoutes('aluno', 'alunos',
+const alunosHandlers = GenericHandlers.create(
+  'aluno', 'alunos',
   ['nome', 'email', 'telefone', 'data_nascimento', 'instrumento_principal'],
   {
     nome: { required: true, type: 'string' },
@@ -340,8 +422,15 @@ createGenericRoutes('aluno', 'alunos',
   }
 );
 
+app.get('/api/alunos', alunosHandlers.getAll);
+app.get('/api/alunos/:id', alunosHandlers.getById);
+app.post('/api/alunos', alunosHandlers.create);
+app.put('/api/alunos/:id', alunosHandlers.update);
+app.delete('/api/alunos/:id', alunosHandlers.delete);
+
 // Rotas para Professores
-createGenericRoutes('professore', 'professores',
+const professoresHandlers = GenericHandlers.create(
+  'professore', 'professores',
   ['nome', 'email', 'telefone', 'especialidade', 'limite_alunos', 'porcentagem_repassa'],
   {
     nome: { required: true, type: 'string' },
@@ -353,638 +442,639 @@ createGenericRoutes('professore', 'professores',
   }
 );
 
-// ==================== NOVAS ROTAS PARA O SISTEMA DE AULAS ====================
+app.get('/api/professores', professoresHandlers.getAll);
+app.get('/api/professores/:id', professoresHandlers.getById);
+app.post('/api/professores', professoresHandlers.create);
+app.put('/api/professores/:id', professoresHandlers.update);
+app.delete('/api/professores/:id', professoresHandlers.delete);
 
-// Rota para criar uma nova configuração de aula
-app.post('/api/aulas/configurar', (req, res) => {
-  const { instrumento, turno, professor_id, data_inicio, dias_semana } = req.body;
+// ==============================================================
+// HANDLERS ESPECÍFICOS PARA AULAS
+// ==============================================================
 
-  // Validações básicas
-  if (!instrumento || !turno || !professor_id || !data_inicio || !dias_semana || !Array.isArray(dias_semana) || dias_semana.length === 0) {
-    return res.status(400).json({ error: 'Instrumento, turno, professor, data de início e dias da semana são obrigatórios' });
-  }
+const AulasHandlers = {
+  /**
+   * Configura uma nova aula
+   */
+  configurar: async (req, res) => {
+    try {
+      const { instrumento, turno, professor_id, data_inicio, dias_semana } = req.body;
 
-  if (!['manhã', 'tarde', 'noite'].includes(turno)) {
-    return res.status(400).json({ error: 'Turno deve ser "manhã", "tarde" ou "noite"' });
-  }
+      // Validações básicas
+      if (!instrumento || !turno || !professor_id || !data_inicio || !dias_semana || !Array.isArray(dias_semana) || dias_semana.length === 0) {
+        return res.status(400).json({ error: 'Instrumento, turno, professor, data de início e dias da semana são obrigatórios' });
+      }
 
-  // Verificar se o professor existe
-  db.get('SELECT * FROM professores WHERE id = ?', [professor_id], (err, professor) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!professor) {
-      return res.status(404).json({ error: 'Professor não encontrado' });
-    }
+      if (!['manhã', 'tarde', 'noite'].includes(turno)) {
+        return res.status(400).json({ error: 'Turno deve ser "manhã", "tarde" ou "noite"' });
+      }
 
-    // Inserir a configuração da aula
-    db.run(
-      'INSERT INTO aulas_configuradas (instrumento, turno, professor_id, data_inicio) VALUES (?, ?, ?, ?)',
-      [instrumento, turno, professor_id, data_inicio],
-      function (err) {
-        if (err) {
-          return res.status(500).json({ error: err.message });
+      // Verificar se o professor existe
+      const professor = await Database.get('SELECT * FROM professores WHERE id = ?', [professor_id]);
+      if (!professor) {
+        return res.status(404).json({ error: 'Professor não encontrado' });
+      }
+
+      // Inserir a configuração da aula
+      const result = await Database.run(
+        'INSERT INTO aulas_configuradas (instrumento, turno, professor_id, data_inicio) VALUES (?, ?, ?, ?)',
+        [instrumento, turno, professor_id, data_inicio]
+      );
+
+      const aulaId = result.id;
+
+      // Inserir os dias da semana
+      for (const dia of dias_semana) {
+        if (dia < 0 || dia > 6) {
+          // Se houver erro, remover a aula criada
+          await Database.run('DELETE FROM aulas_configuradas WHERE id = ?', [aulaId]);
+          return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) e 6 (sábado)' });
         }
 
-        const aulaId = this.lastID;
-
-        // Inserir os dias da semana
-        const diasPromises = dias_semana.map(dia => {
-          return new Promise((resolve, reject) => {
-            if (dia < 0 || dia > 6) {
-              return reject(new Error('Dia da semana deve estar entre 0 (domingo) e 6 (sábado)'));
-            }
-
-            db.run(
-              'INSERT INTO aulas_dias_semana (aula_id, dia_semana) VALUES (?, ?)',
-              [aulaId, dia],
-              function (err) {
-                if (err) {
-                  return reject(err);
-                }
-                resolve();
-              }
-            );
-          });
-        });
-
-        Promise.all(diasPromises)
-          .then(() => {
-            res.status(201).json({ 
-              id: aulaId, 
-              message: 'Aula configurada com sucesso' 
-            });
-          })
-          .catch(error => {
-            // Se houver erro ao inserir dias, remover a aula criada
-            db.run('DELETE FROM aulas_configuradas WHERE id = ?', [aulaId]);
-            res.status(500).json({ error: error.message });
-          });
-      }
-    );
-  });
-});
-
-// Rota para listar todas as aulas configuradas com seus dias e alunos
-app.get('/api/aulas/configuradas', (req, res) => {
-  const query = `
-    SELECT 
-        ac.*,
-        p.nome as professor_nome,
-        GROUP_CONCAT(DISTINCT ads.dia_semana ORDER BY ads.dia_semana) as dias_semana,
-        COUNT(DISTINCT aa.aluno_id) as total_alunos
-    FROM aulas_configuradas ac
-    LEFT JOIN professores p ON ac.professor_id = p.id
-    LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
-    LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
-    GROUP BY ac.id
-    ORDER BY ac.created_at DESC
-  `;
-
-  db.all(query, (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-
-    // Processar os dias da semana
-    const aulas = rows.map(aula => {
-      return {
-        ...aula,
-        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
-      };
-    });
-
-    res.json({ aulas: aulas });
-  });
-});
-
-// Rota para obter detalhes de uma aula específica
-app.get('/api/aulas/configuradas/:id', (req, res) => {
-  const { id } = req.params;
-
-  // Obter informações da aula
-  const aulaQuery = `
-    SELECT 
-      ac.*,
-      p.nome as professor_nome,
-      p.especialidade as professor_especialidade
-    FROM aulas_configuradas ac
-    LEFT JOIN professores p ON ac.professor_id = p.id
-    WHERE ac.id = ?
-  `;
-
-  // Obter dias da semana
-  const diasQuery = `
-    SELECT dia_semana FROM aulas_dias_semana WHERE aula_id = ?
-  `;
-
-  // Obter alunos vinculados
-  const alunosQuery = `
-    SELECT 
-      a.id,
-      a.nome,
-      a.email,
-      a.instrumento_principal
-    FROM aulas_alunos aa
-    LEFT JOIN alunos a ON aa.aluno_id = a.id
-    WHERE aa.aula_id = ?
-  `;
-
-  db.get(aulaQuery, [id], (err, aula) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!aula) {
-      return res.status(404).json({ error: 'Aula não encontrada' });
-    }
-
-    // Obter dias da semana
-    db.all(diasQuery, [id], (err, diasRows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+        await Database.run(
+          'INSERT INTO aulas_dias_semana (aula_id, dia_semana) VALUES (?, ?)',
+          [aulaId, dia]
+        );
       }
 
+      res.status(201).json({
+        id: aulaId,
+        message: 'Aula configurada com sucesso'
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Lista todas as aulas configuradas
+   */
+  listarConfiguradas: async (req, res) => {
+    try {
+      const query = `
+        SELECT 
+            ac.*,
+            p.nome as professor_nome,
+            GROUP_CONCAT(DISTINCT ads.dia_semana ORDER BY ads.dia_semana) as dias_semana,
+            COUNT(DISTINCT aa.aluno_id) as total_alunos,
+            GROUP_CONCAT(DISTINCT a.nome) as alunos
+        FROM aulas_configuradas ac
+        LEFT JOIN professores p ON ac.professor_id = p.id
+        LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
+        LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
+        LEFT JOIN alunos a ON aa.aluno_id = a.id
+        GROUP BY ac.id
+        ORDER BY ac.created_at DESC
+      `;
+
+      const rows = await Database.all(query);
+
+      // Processar os dias da semana
+      const aulas = rows.map(aula => {
+        return {
+          ...aula,
+          dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+        };
+      });
+
+      res.json({ aulas: aulas });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Obtém detalhes de uma aula específica
+   */
+  obterDetalhes: async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Obter informações da aula
+      const aulaQuery = `
+        SELECT 
+          ac.*,
+          p.nome as professor_nome,
+          p.especialidade as professor_especialidade
+        FROM aulas_configuradas ac
+        LEFT JOIN professores p ON ac.professor_id = p.id
+        WHERE ac.id = ?
+      `;
+
+      const aula = await Database.get(aulaQuery, [id]);
+      if (!aula) {
+        return res.status(404).json({ error: 'Aula não encontrada' });
+      }
+
+      // Obter dias da semana
+      const diasRows = await Database.all(
+        'SELECT dia_semana FROM aulas_dias_semana WHERE aula_id = ?',
+        [id]
+      );
       const dias_semana = diasRows.map(row => row.dia_semana);
 
-      // Obter alunos
-      db.all(alunosQuery, [id], (err, alunosRows) => {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
+      // Obter alunos vinculados
+      const alunosRows = await Database.all(
+        `SELECT 
+          a.id,
+          a.nome,
+          a.email,
+          a.instrumento_principal
+        FROM aulas_alunos aa
+        LEFT JOIN alunos a ON aa.aluno_id = a.id
+        WHERE aa.aula_id = ?`,
+        [id]
+      );
 
-        res.json({
-          ...aula,
-          dias_semana,
-          alunos: alunosRows
-        });
+      res.json({
+        ...aula,
+        dias_semana,
+        alunos: alunosRows
       });
-    });
-  });
-});
-
-// Rota para vincular um aluno a uma aula
-app.post('/api/aulas/:aulaId/alunos/:alunoId', (req, res) => {
-  const { aulaId, alunoId } = req.params;
-
-  // Verificar se a aula existe
-  db.get('SELECT * FROM aulas_configuradas WHERE id = ?', [aulaId], (err, aula) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-    if (!aula) {
-      return res.status(404).json({ error: 'Aula não encontrada' });
-    }
+  },
 
-    // Verificar se o aluno existe
-    db.get('SELECT * FROM alunos WHERE id = ?', [alunoId], (err, aluno) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+  /**
+   * Vincula um aluno a uma aula
+   */
+  vincularAluno: async (req, res) => {
+    try {
+      const { aulaId, alunoId } = req.params;
+
+      // Verificar se a aula existe
+      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [aulaId]);
+      if (!aula) {
+        return res.status(404).json({ error: 'Aula não encontrada' });
       }
+
+      // Verificar se o aluno existe
+      const aluno = await Database.get('SELECT * FROM alunos WHERE id = ?', [alunoId]);
       if (!aluno) {
         return res.status(404).json({ error: 'Aluno não encontrado' });
       }
 
       // Verificar se o aluno já está vinculado a esta aula
-      db.get('SELECT * FROM aulas_alunos WHERE aula_id = ? AND aluno_id = ?', [aulaId, alunoId], (err, vinculo) => {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
-        if (vinculo) {
-          return res.status(400).json({ error: 'Aluno já está vinculado a esta aula' });
-        }
+      const vinculo = await Database.get(
+        'SELECT * FROM aulas_alunos WHERE aula_id = ? AND aluno_id = ?',
+        [aulaId, alunoId]
+      );
 
-        // Vincular aluno à aula
-        db.run(
-          'INSERT INTO aulas_alunos (aula_id, aluno_id) VALUES (?, ?)',
-          [aulaId, alunoId],
-          function (err) {
-            if (err) {
-              return res.status(500).json({ error: err.message });
-            }
-            res.status(201).json({ message: 'Aluno vinculado à aula com sucesso' });
-          }
-        );
-      });
-    });
-  });
-});
-
-// Rota para desvincular um aluno de uma aula
-app.delete('/api/aulas/:aulaId/alunos/:alunoId', (req, res) => {
-  const { aulaId, alunoId } = req.params;
-
-  db.run(
-    'DELETE FROM aulas_alunos WHERE aula_id = ? AND aluno_id = ?',
-    [aulaId, alunoId],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+      if (vinculo) {
+        return res.status(400).json({ error: 'Aluno já está vinculado a esta aula' });
       }
-      if (this.changes === 0) {
+
+      // Vincular aluno à aula
+      await Database.run(
+        'INSERT INTO aulas_alunos (aula_id, aluno_id) VALUES (?, ?)',
+        [aulaId, alunoId]
+      );
+
+      res.status(201).json({ message: 'Aluno vinculado à aula com sucesso' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Desvincula um aluno de uma aula
+   */
+  desvincularAluno: async (req, res) => {
+    try {
+      const { aulaId, alunoId } = req.params;
+
+      const result = await Database.run(
+        'DELETE FROM aulas_alunos WHERE aula_id = ? AND aluno_id = ?',
+        [aulaId, alunoId]
+      );
+
+      if (result.changes === 0) {
         return res.status(404).json({ error: 'Vínculo não encontrado' });
       }
+
       res.json({ message: 'Aluno desvinculado da aula com sucesso' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-  );
-});
+  },
 
-// Rota para obter todas as aulas de um aluno
-app.get('/api/alunos/:alunoId/aulas', (req, res) => {
-  const { alunoId } = req.params;
+  /**
+   * Obtém todas as aulas de um aluno
+   */
+  obterAulasAluno: async (req, res) => {
+    try {
+      const { alunoId } = req.params;
 
-  const query = `
-    SELECT 
-      ac.*,
-      p.nome as professor_nome,
-      p.especialidade as professor_especialidade,
-      GROUP_CONCAT(ads.dia_semana) as dias_semana
-    FROM aulas_alunos aa
-    LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id
-    LEFT JOIN professores p ON ac.professor_id = p.id
-    LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
-    WHERE aa.aluno_id = ?
-    GROUP BY ac.id
-    ORDER BY ac.created_at DESC
-  `;
+      const query = `
+        SELECT 
+          ac.*,
+          p.nome as professor_nome,
+          p.especialidade as professor_especialidade,
+          GROUP_CONCAT(ads.dia_semana) as dias_semana
+        FROM aulas_alunos aa
+        LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id
+        LEFT JOIN professores p ON ac.professor_id = p.id
+        LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
+        WHERE aa.aluno_id = ?
+        GROUP BY ac.id
+        ORDER BY ac.created_at DESC
+      `;
 
-  db.all(query, [alunoId], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+      const rows = await Database.all(query, [alunoId]);
 
-    // Processar os dias da semana
-    const aulas = rows.map(aula => {
-      return {
-        ...aula,
-        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
-      };
-    });
-
-    res.json({ aulas: aulas });
-  });
-});
-
-// Rota para obter todas as aulas de um professor
-app.get('/api/professores/:professorId/aulas', (req, res) => {
-  const { professorId } = req.params;
-
-  const query = `
-    SELECT 
-      ac.*,
-      GROUP_CONCAT(ads.dia_semana) as dias_semana,
-      COUNT(aa.aluno_id) as total_alunos
-    FROM aulas_configuradas ac
-    LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
-    LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
-    WHERE ac.professor_id = ?
-    GROUP BY ac.id
-    ORDER BY ac.created_at DESC
-  `;
-
-  db.all(query, [professorId], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-
-    // Processar os dias da semana
-    const aulas = rows.map(aula => {
-      return {
-        ...aula,
-        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
-      };
-    });
-
-    res.json({ aulas: aulas });
-  });
-});
-
-// Rota para atualizar uma aula configurada
-app.put('/api/aulas/configuradas/:id', (req, res) => {
-  const { id } = req.params;
-  const { instrumento, turno, data_inicio, dias_semana } = req.body;
-
-  // Verificar se a aula existe
-  db.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id], (err, aula) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!aula) {
-      return res.status(404).json({ error: 'Aula não encontrada' });
-    }
-
-    const updates = [];
-    const values = [];
-
-    if (instrumento !== undefined) {
-      updates.push('instrumento = ?');
-      values.push(instrumento);
-    }
-    if (turno !== undefined) {
-      if (!['manhã', 'tarde', 'noite'].includes(turno)) {
-        return res.status(400).json({ error: 'Turno deve ser "manhã", "tarde" ou "noite"' });
-      }
-      updates.push('turno = ?');
-      values.push(turno);
-    }
-    if (data_inicio !== undefined) {
-      updates.push('data_inicio = ?');
-      values.push(data_inicio);
-    }
-
-    if (updates.length === 0 && !dias_semana) {
-      return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
-    }
-
-    // Atualizar dados básicos da aula, se houver
-    if (updates.length > 0) {
-      values.push(id);
-      const query = `UPDATE aulas_configuradas SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
-
-      db.run(query, values, function (err) {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
+      // Processar os dias da semana
+      const aulas = rows.map(aula => {
+        return {
+          ...aula,
+          dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+        };
       });
-    }
 
-    // Atualizar dias da semana, se fornecidos
-    if (dias_semana && Array.isArray(dias_semana)) {
-      // Remover dias existentes
-      db.run('DELETE FROM aulas_dias_semana WHERE aula_id = ?', [id], (err) => {
-        if (err) {
-          return res.status(500).json({ error: err.message });
+      res.json({ aulas: aulas });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Obtém todas as aulas de um professor
+   */
+  obterAulasProfessor: async (req, res) => {
+    try {
+      const { professorId } = req.params;
+
+      const query = `
+        SELECT 
+          ac.*,
+          GROUP_CONCAT(ads.dia_semana) as dias_semana,
+          COUNT(aa.aluno_id) as total_alunos
+        FROM aulas_configuradas ac
+        LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
+        LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
+        WHERE ac.professor_id = ?
+        GROUP BY ac.id
+        ORDER BY ac.created_at DESC
+      `;
+
+      const rows = await Database.all(query, [professorId]);
+
+      // Processar os dias da semana
+      const aulas = rows.map(aula => {
+        return {
+          ...aula,
+          dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+        };
+      });
+
+      res.json({ aulas: aulas });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Atualiza uma aula configurada
+   */
+  atualizarAula: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { instrumento, turno, data_inicio, dias_semana } = req.body;
+
+      // Verificar se a aula existe
+      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      if (!aula) {
+        return res.status(404).json({ error: 'Aula não encontrada' });
+      }
+
+      const updates = [];
+      const values = [];
+
+      if (instrumento !== undefined) {
+        updates.push('instrumento = ?');
+        values.push(instrumento);
+      }
+      if (turno !== undefined) {
+        if (!['manhã', 'tarde', 'noite'].includes(turno)) {
+          return res.status(400).json({ error: 'Turno deve ser "manhã", "tarde" ou "noite"' });
         }
+        updates.push('turno = ?');
+        values.push(turno);
+      }
+      if (data_inicio !== undefined) {
+        updates.push('data_inicio = ?');
+        values.push(data_inicio);
+      }
+
+      if (updates.length === 0 && !dias_semana) {
+        return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
+      }
+
+      // Atualizar dados básicos da aula, se houver
+      if (updates.length > 0) {
+        values.push(id);
+        await Database.run(
+          `UPDATE aulas_configuradas SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          values
+        );
+      }
+
+      // Atualizar dias da semana, se fornecidos
+      if (dias_semana && Array.isArray(dias_semana)) {
+        // Remover dias existentes
+        await Database.run('DELETE FROM aulas_dias_semana WHERE aula_id = ?', [id]);
 
         // Inserir novos dias
-        const diasPromises = dias_semana.map(dia => {
-          return new Promise((resolve, reject) => {
-            if (dia < 0 || dia > 6) {
-              return reject(new Error('Dia da semana deve estar entre 0 (domingo) e 6 (sábado)'));
-            }
+        for (const dia of dias_semana) {
+          if (dia < 0 || dia > 6) {
+            return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) e 6 (sábado)' });
+          }
 
-            db.run(
-              'INSERT INTO aulas_dias_semana (aula_id, dia_semana) VALUES (?, ?)',
-              [id, dia],
-              function (err) {
-                if (err) {
-                  return reject(err);
-                }
-                resolve();
-              }
-            );
-          });
-        });
+          await Database.run(
+            'INSERT INTO aulas_dias_semana (aula_id, dia_semana) VALUES (?, ?)',
+            [id, dia]
+          );
+        }
+      }
 
-        Promise.all(diasPromises)
-          .then(() => {
-            res.json({ message: 'Aula atualizada com sucesso' });
-          })
-          .catch(error => {
-            res.status(500).json({ error: error.message });
-          });
-      });
-    } else {
       res.json({ message: 'Aula atualizada com sucesso' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-  });
-});
+  },
 
-// Rota para excluir uma aula configurada
-app.delete('/api/aulas/configuradas/:id', (req, res) => {
-  const { id } = req.params;
+  /**
+   * Exclui uma aula configurada
+   */
+  excluirAula: async (req, res) => {
+    try {
+      const { id } = req.params;
 
-  // Verificar se a aula existe
-  db.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id], (err, aula) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!aula) {
-      return res.status(404).json({ error: 'Aula não encontrada' });
-    }
-
-    // Excluir a aula (as chaves estrangeiras com CASCADE cuidarão dos registros relacionados)
-    db.run('DELETE FROM aulas_configuradas WHERE id = ?', [id], function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+      // Verificar se a aula existe
+      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      if (!aula) {
+        return res.status(404).json({ error: 'Aula não encontrada' });
       }
+
+      // Excluir a aula (as chaves estrangeiras com CASCADE cuidarão dos registros relacionados)
+      await Database.run('DELETE FROM aulas_configuradas WHERE id = ?', [id]);
+
       res.json({ message: 'Aula excluída com sucesso' });
-    });
-  });
-});
-
-// ==================== ROTAS PARA FINANCEIRO ====================
-
-app.get('/api/financeiro', (req, res) => {
-  const query = `
-    SELECT p.*, a.nome as aluno_nome 
-    FROM pagamentos p 
-    LEFT JOIN alunos a ON p.aluno_id = a.id
-    ORDER BY p.data_vencimento DESC
-  `;
-
-  db.all(query, (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-    res.json({ pagamentos: rows });
-  });
-});
-
-app.get('/api/financeiro/:id', (req, res) => {
-  const { id } = req.params;
-  const query = `
-    SELECT p.*, a.nome as aluno_nome 
-    FROM pagamentos p 
-    LEFT JOIN alunos a ON p.aluno_id = a.id
-    WHERE p.id = ?
-  `;
-
-  db.get(query, [id], (err, row) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!row) {
-      return res.status(404).json({ error: 'Pagamento não encontrado' });
-    }
-    res.json(row);
-  });
-});
-
-app.post('/api/financeiro', (req, res) => {
-  const { aluno_id, valor, data_vencimento } = req.body;
-
-  // Validações
-  if (!aluno_id || !valor || !data_vencimento) {
-    return res.status(400).json({ error: 'Aluno, valor e data de vencimento são obrigatórios' });
   }
+};
 
-  if (valor <= 0) {
-    return res.status(400).json({ error: 'O valor deve ser maior que zero' });
-  }
+// ==============================================================
+// ROTAS PARA AULAS
+// ==============================================================
 
-  db.run(
-    'INSERT INTO pagamentos (aluno_id, valor, data_vencimento) VALUES (?, ?, ?)',
-    [aluno_id, valor, data_vencimento],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+app.post('/api/aulas/configurar', AulasHandlers.configurar);
+app.get('/api/aulas/configuradas', AulasHandlers.listarConfiguradas);
+app.get('/api/aulas/configuradas/:id', AulasHandlers.obterDetalhes);
+app.post('/api/aulas/:aulaId/alunos/:alunoId', AulasHandlers.vincularAluno);
+app.delete('/api/aulas/:aulaId/alunos/:alunoId', AulasHandlers.desvincularAluno);
+app.get('/api/alunos/:alunoId/aulas', AulasHandlers.obterAulasAluno);
+app.get('/api/professores/:professorId/aulas', AulasHandlers.obterAulasProfessor);
+app.put('/api/aulas/configuradas/:id', AulasHandlers.atualizarAula);
+app.delete('/api/aulas/configuradas/:id', AulasHandlers.excluirAula);
+
+// ==============================================================
+// HANDLERS PARA FINANCEIRO
+// ==============================================================
+
+const FinanceiroHandlers = {
+  /**
+   * Lista todos os pagamentos
+   */
+  listar: async (req, res) => {
+    try {
+      const query = `
+        SELECT p.*, a.nome as aluno_nome 
+        FROM pagamentos p 
+        LEFT JOIN alunos a ON p.aluno_id = a.id
+        ORDER BY p.data_vencimento DESC
+      `;
+
+      const rows = await Database.all(query);
+      res.json({ pagamentos: rows });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Obtém um pagamento específico
+   */
+  obter: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const query = `
+        SELECT p.*, a.nome as aluno_nome 
+        FROM pagamentos p 
+        LEFT JOIN alunos a ON p.aluno_id = a.id
+        WHERE p.id = ?
+      `;
+
+      const row = await Database.get(query, [id]);
+      if (!row) {
+        return res.status(404).json({ error: 'Pagamento não encontrado' });
       }
-      res.status(201).json({ id: this.lastID, message: 'Pagamento registrado com sucesso' });
-    }
-  );
-});
 
-app.put('/api/financeiro/:id', (req, res) => {
-  const { id } = req.params;
-  const { aluno_id, valor, data_vencimento, status, data_pagamento, valor_repasse } = req.body;
+      res.json(row);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
 
-  // Verificar se o pagamento existe
-  db.get('SELECT * FROM pagamentos WHERE id = ?', [id], (err, pagamento) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (!pagamento) {
-      return res.status(404).json({ error: 'Pagamento não encontrado' });
-    }
+  /**
+   * Cria um novo pagamento
+   */
+  criar: async (req, res) => {
+    try {
+      const { aluno_id, valor, data_vencimento } = req.body;
 
-    const updates = [];
-    const values = [];
-
-    if (aluno_id !== undefined) {
-      updates.push('aluno_id = ?');
-      values.push(aluno_id);
-    }
-    if (valor !== undefined) {
-      updates.push('valor = ?');
-      values.push(valor);
-    }
-    if (data_vencimento !== undefined) {
-      updates.push('data_vencimento = ?');
-      values.push(data_vencimento);
-    }
-    if (status !== undefined) {
-      updates.push('status = ?');
-      values.push(status);
-    }
-    if (data_pagamento !== undefined) {
-      updates.push('data_pagamento = ?');
-      values.push(data_pagamento);
-    }
-    if (valor_repasse !== undefined) {
-      updates.push('valor_repasse = ?');
-      values.push(valor_repasse);
-    }
-
-    if (updates.length === 0) {
-      return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
-    }
-
-    values.push(id);
-    const query = `UPDATE pagamentos SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`;
-
-    db.run(query, values, function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+      // Validações
+      if (!aluno_id || !valor || !data_vencimento) {
+        return res.status(400).json({ error: 'Aluno, valor e data de vencimento são obrigatórios' });
       }
-      res.json({ message: 'Pagamento atualizado com sucesso', changes: this.changes });
-    });
-  });
-});
 
-app.delete('/api/financeiro/:id', (req, res) => {
-  const { id } = req.params;
-
-  db.run('DELETE FROM pagamentos WHERE id = ?', [id], function (err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    if (this.changes === 0) {
-      return res.status(404).json({ error: 'Pagamento não encontrado' });
-    }
-    res.json({ message: 'Pagamento excluído com sucesso' });
-  });
-});
-
-// Rota para processar pagamento
-app.post('/api/financeiro/:id/pagar', (req, res) => {
-  const { id } = req.params;
-  const { data_pagamento } = req.body;
-
-  // Obter informações do pagamento e do aluno
-  db.get(
-    'SELECT p.*, a.nome as aluno_nome FROM pagamentos p LEFT JOIN alunos a ON p.aluno_id = a.id WHERE p.id = ?',
-    [id],
-    (err, pagamento) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
+      if (valor <= 0) {
+        return res.status(400).json({ error: 'O valor deve ser maior que zero' });
       }
+
+      const result = await Database.run(
+        'INSERT INTO pagamentos (aluno_id, valor, data_vencimento) VALUES (?, ?, ?)',
+        [aluno_id, valor, data_vencimento]
+      );
+
+      res.status(201).json({ id: result.id, message: 'Pagamento registrado com sucesso' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Atualiza um pagamento
+   */
+  atualizar: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { aluno_id, valor, data_vencimento, status, data_pagamento, valor_repasse } = req.body;
+
+      // Verificar se o pagamento existe
+      const pagamento = await Database.get('SELECT * FROM pagamentos WHERE id = ?', [id]);
+      if (!pagamento) {
+        return res.status(404).json({ error: 'Pagamento não encontrado' });
+      }
+
+      const updates = [];
+      const values = [];
+
+      if (aluno_id !== undefined) {
+        updates.push('aluno_id = ?');
+        values.push(aluno_id);
+      }
+      if (valor !== undefined) {
+        updates.push('valor = ?');
+        values.push(valor);
+      }
+      if (data_vencimento !== undefined) {
+        updates.push('data_vencimento = ?');
+        values.push(data_vencimento);
+      }
+      if (status !== undefined) {
+        updates.push('status = ?');
+        values.push(status);
+      }
+      if (data_pagamento !== undefined) {
+        updates.push('data_pagamento = ?');
+        values.push(data_pagamento);
+      }
+      if (valor_repasse !== undefined) {
+        updates.push('valor_repasse = ?');
+        values.push(valor_repasse);
+      }
+
+      if (updates.length === 0) {
+        return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
+      }
+
+      values.push(id);
+      const result = await Database.run(
+        `UPDATE pagamentos SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        values
+      );
+
+      res.json({ message: 'Pagamento atualizado com sucesso', changes: result.changes });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Exclui um pagamento
+   */
+  excluir: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await Database.run('DELETE FROM pagamentos WHERE id = ?', [id]);
+
+      if (result.changes === 0) {
+        return res.status(404).json({ error: 'Pagamento não encontrado' });
+      }
+
+      res.json({ message: 'Pagamento excluído com sucesso' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Processa um pagamento
+   */
+  processarPagamento: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { data_pagamento } = req.body;
+
+      // Obter informações do pagamento e do aluno
+      const pagamento = await Database.get(
+        'SELECT p.*, a.nome as aluno_nome FROM pagamentos p LEFT JOIN alunos a ON p.aluno_id = a.id WHERE p.id = ?',
+        [id]
+      );
 
       if (!pagamento) {
         return res.status(404).json({ error: 'Pagamento não encontrado' });
       }
 
       // Obter a aula relacionada a este aluno para calcular o repasse
-      db.get(
+      const aula = await Database.get(
         'SELECT ac.*, p.porcentagem_repassa FROM aulas_alunos aa LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id LEFT JOIN professores p ON ac.professor_id = p.id WHERE aa.aluno_id = ? LIMIT 1',
-        [pagamento.aluno_id],
-        (err, aula) => {
-          if (err) {
-            return res.status(500).json({ error: err.message });
-          }
-
-          let valor_repasse = 0;
-          if (aula && aula.porcentagem_repassa) {
-            valor_repasse = pagamento.valor * (aula.porcentagem_repassa / 100);
-          }
-
-          // Atualizar o pagamento
-          db.run(
-            'UPDATE pagamentos SET status = "pago", data_pagamento = ?, valor_repasse = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            [data_pagamento || new Date().toISOString(), valor_repasse, id],
-            function (err) {
-              if (err) {
-                return res.status(500).json({ error: err.message });
-              }
-              res.json({ message: 'Pagamento processado com sucesso', valor_repasse });
-            }
-          );
-        }
+        [pagamento.aluno_id]
       );
+
+      let valor_repasse = 0;
+      if (aula && aula.porcentagem_repassa) {
+        valor_repasse = pagamento.valor * (aula.porcentagem_repassa / 100);
+      }
+
+      // Atualizar o pagamento
+      await Database.run(
+        'UPDATE pagamentos SET status = "pago", data_pagamento = ?, valor_repasse = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [data_pagamento || new Date().toISOString(), valor_repasse, id]
+      );
+
+      res.json({ message: 'Pagamento processado com sucesso', valor_repasse });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
-  );
-});
+  }
+};
 
-// ==================== ROTAS DE RELATÓRIOS ====================
+// ==============================================================
+// ROTAS PARA FINANCEIRO
+// ==============================================================
 
-app.get('/api/relatorios/resumo', (req, res) => {
-  const queries = {
-    totalAlunos: 'SELECT COUNT(*) as total FROM alunos',
-    totalProfessores: 'SELECT COUNT(*) as total FROM professores',
-    totalAulasConfiguradas: 'SELECT COUNT(*) as total FROM aulas_configuradas',
-    receitaMensal: 'SELECT SUM(valor) as total FROM pagamentos WHERE status = "pago" AND strftime("%Y-%m", data_pagamento) = strftime("%Y-%m", "now")'
-  };
+app.get('/api/financeiro', FinanceiroHandlers.listar);
+app.get('/api/financeiro/:id', FinanceiroHandlers.obter);
+app.post('/api/financeiro', FinanceiroHandlers.criar);
+app.put('/api/financeiro/:id', FinanceiroHandlers.atualizar);
+app.delete('/api/financeiro/:id', FinanceiroHandlers.excluir);
+app.post('/api/financeiro/:id/pagar', FinanceiroHandlers.processarPagamento);
 
-  const results = {};
-  let completed = 0;
-  const totalQueries = Object.keys(queries).length;
+// ==============================================================
+// ROTAS DE RELATÓRIOS
+// ==============================================================
 
-  for (const [key, query] of Object.entries(queries)) {
-    db.get(query, (err, row) => {
-      if (err) {
-        console.error(`Erro na query ${key}:`, err.message);
-      }
+app.get('/api/relatorios/resumo', async (req, res) => {
+  try {
+    const queries = {
+      totalAlunos: 'SELECT COUNT(*) as total FROM alunos',
+      totalProfessores: 'SELECT COUNT(*) as total FROM professores',
+      totalAulasConfiguradas: 'SELECT COUNT(*) as total FROM aulas_configuradas',
+      receitaMensal: 'SELECT SUM(valor) as total FROM pagamentos WHERE status = "pago" AND strftime("%Y-%m", data_pagamento) = strftime("%Y-%m", "now")'
+    };
+
+    const results = {};
+
+    for (const [key, query] of Object.entries(queries)) {
+      const row = await Database.get(query);
       results[key] = row ? row.total : 0;
+    }
 
-      completed++;
-      if (completed === totalQueries) {
-        res.json(results);
-      }
-    });
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-// ==================== MIDDLEWARE DE ERRO ====================
+// ==============================================================
+// MIDDLEWARE DE ERRO E ROTAS FINAIS
+// ==============================================================
 
+// Middleware de erro
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Algo deu errado!' });
@@ -995,15 +1085,15 @@ app.use('/api/*', (req, res) => {
   res.status(404).json({ error: 'Endpoint da API não encontrado' });
 });
 
-// ==================== SERVIÇO DO FRONTEND ====================
-
 // Rota para servir a página HTML principal
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-// ==================== CONFIGURAÇÃO PARA VERCEL ====================
 
-// A Vercel espera que exportemos a app como um módulo
+// ==============================================================
+// CONFIGURAÇÃO PARA VERCEL
+// ==============================================================
+
 module.exports = app;
 
 // Se não estivermos na Vercel, iniciamos o servidor normalmente
