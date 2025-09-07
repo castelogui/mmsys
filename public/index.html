@@ -313,6 +313,42 @@
         </div>
     </div>
 
+    <!-- Modal para Cancelamento -->
+    <div id="modalCancelar" class="modal-cancelar">
+        <div class="modal-content-cancelar">
+            <span class="close-modal">&times;</span>
+            <h3>Cancelar Aula</h3>
+            <div class="form-group">
+                <label for="motivoCancelamento">Motivo do Cancelamento:</label>
+                <textarea id="motivoCancelamento" placeholder="Digite o motivo do cancelamento"></textarea>
+            </div>
+            <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+                <button class="btn-modal btn-cancel" id="cancelarCancelamentoBtn">Cancelar</button>
+                <button class="btn-modal btn-confirm" id="confirmarCancelamentoBtn">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Reagendamento -->
+    <div id="modalReagendar" class="modal-reagendar">
+        <div class="modal-content-reagendar">
+            <span class="close-modal">&times;</span>
+            <h3>Reagendar Aula</h3>
+            <div class="form-group">
+                <label for="novaData">Nova Data:</label>
+                <input type="date" id="novaData">
+            </div>
+            <div class="form-group">
+                <label for="motivoReagendamento">Motivo do Reagendamento:</label>
+                <textarea id="motivoReagendamento" placeholder="Digite o motivo do reagendamento"></textarea>
+            </div>
+            <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+                <button class="btn-modal btn-cancel" id="cancelarReagendamentoBtn">Cancelar</button>
+                <button class="btn-modal btn-confirm" id="confirmarReagendamentoBtn">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Container para toasts (será criado dinamicamente pelo JavaScript) -->
 
     <!-- Usando Chart.js localmente em vez do CDN -->

@@ -139,13 +139,13 @@ const Utils = {
     const firstDay = new Date(date);
     const lastDay = new Date(date);
 
-    // Ajusta para segunda-feira
-    const day = firstDay.getDay();
-    const diff = firstDay.getDate() - day + (day === 0 ? -6 : 1);
-    firstDay.setDate(diff);
+    // Ajusta para domingo (primeiro dia da semana)
+    const day = firstDay.getDay(); // 0 = Domingo, 1 = Segunda, ..., 6 = Sábado
+    const diffToSunday = firstDay.getDate() - day;
+    firstDay.setDate(diffToSunday);
 
-    // Ajusta para domingo
-    lastDay.setDate(firstDay.getDate() + 6);
+    // Ajusta para sábado (último dia da semana)
+    lastDay.setDate(diffToSunday + 6);
 
     return { firstDay, lastDay };
   },
@@ -170,6 +170,50 @@ const Utils = {
     const result = new Date(date);
     result.setDate(result.getDate() + days);
     return result;
+  },
+
+  toggleTheme: () => {
+    const html = document.documentElement;
+    const currentTheme = html.getAttribute('data-theme');
+    const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+    html.setAttribute('data-theme', newTheme);
+    localStorage.setItem('theme', newTheme);
+  },
+
+  updateThemeIcon: (currentTheme) => {
+    return currentTheme === 'dark' ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
+  },
+
+  verifyTheme: () => {
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+
+    // Adicionar botão de toggle de tema
+    const themeToggleBtn = document.createElement('button');
+    themeToggleBtn.className = 'theme-toggle';
+
+    themeToggleBtn.innerHTML = Utils.updateThemeIcon(savedTheme);
+    themeToggleBtn.addEventListener('click', Utils.toggleTheme);
+
+    // Adicionar ao header
+    const headerActions = document.querySelector('.header-actions');
+    if (headerActions) {
+      headerActions.appendChild(themeToggleBtn);
+    }
+
+    // Atualizar ícone conforme o tema
+    function updateThemeIcon() {
+      const currentTheme = document.documentElement.getAttribute('data-theme');
+      themeToggleBtn.innerHTML = Utils.updateThemeIcon(currentTheme);
+    }
+
+    // Observar mudanças no tema
+    const observer = new MutationObserver(updateThemeIcon);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme']
+    });
   }
 };
 
@@ -725,12 +769,11 @@ const ModalSystem = {
                             <input type="date" id="data_inicio" class="form-control" required>
                         </div>
                         <div class="form-group">
-                            <label>Dias da Semana</label>
-                            <div class="dias-semana-container" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;">
-                                <label><input type="checkbox" name="dias_semana" value="1"> Segunda</label>
-                                <label><input type="checkbox" name="dias_semana" value="2"> Terça</label>
-                                <label><input type="checkbox" name="dias_semana" value="3"> Quarta</label>
-                                <label><input type="checkbox" name="dias_semana" value="4"> Quinta</label>
+                            <div class="dias-semana-container" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px;">
+                                <label>Segunda<input type="checkbox" name="dias_semana" value="1"></label>
+                                <label>Terça<input type="checkbox" name="dias_semana" value="2"></label>
+                                <label>Quarta<input type="checkbox" name="dias_semana" value="3"></label>
+                                <label>Quinta<input type="checkbox" name="dias_semana" value="4"></label>
                             </div>
                         </div>
                     `,
@@ -878,6 +921,13 @@ const ModalSystem = {
         const method = action === 'add' ? 'POST' : 'PUT';
 
         await ApiService.request(endpoint, method, formData);
+
+        if (entity === 'aulas' && action === 'add') {
+          // Gerar agendamentos para as próximas 4 semanas
+          await ApiService.request(`/aulas/configuradas/${result.id}/gerar-agendamento`, 'POST', {
+            semanas: 4
+          });
+        }
       }
 
       ToastSystem.show(`${Utils.getEntityName(entity)} ${action === 'add' ? 'criado' : 'atualizado'} com sucesso!`, 'success');
@@ -1075,9 +1125,6 @@ const AuthSystem = {
    * Manipula o logout do usuário
    */
   handleLogout: () => {
-    // Destruir gráficos
-    DashboardSystem.destroyCharts()
-
     localStorage.removeItem('authToken');
     localStorage.removeItem('userData');
     AppState.currentUser = null;
@@ -1144,21 +1191,52 @@ const DashboardSystem = {
    */
   loadAgenda: async () => {
     try {
-      const data = await ApiService.request('/aulas/configuradas');
-      const aulas = data.aulas || data;
+      const { firstDay } = Utils.getWeekRange(AppState.currentWeek);
+      const dataInicioFormatada = firstDay.toISOString().split('T')[0];
 
-      // Processar as aulas para a agenda
-      const agenda = DashboardSystem.processarAulasParaAgenda(aulas);
+      const data = await ApiService.request(`/aulas/agenda-semanal?data_inicio=${dataInicioFormatada}`);
+      const agenda = DashboardSystem.processarAgendamentosParaCalendario(data.agendamentos);
 
-      // Renderizar a tabela de agenda
       DashboardSystem.renderAgenda(agenda);
-
-      // Atualizar o display da semana
-      DashboardSystem.updateWeekDisplay();
+      DashboardSystem.updateWeekDisplay(); // Adicione esta linha
     } catch (error) {
       console.error('Erro ao carregar agenda:', error);
       ToastSystem.show('Erro ao carregar agenda', 'error');
     }
+  },
+
+  /**
+ * Processa as aulas para a estrutura de calendario
+ * @param {Array} aulas - Lista de aulas
+ * @returns {Object} Estrutura de agenda organizada por dia e turno
+ */
+  processarAgendamentosParaCalendario: (agendamentos) => {
+    // Domingo = 0, Segunda = 1, etc.
+    const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+    const turnos = ['manhã', 'tarde', 'noite'];
+
+    let agenda = {};
+    diasDaSemana.forEach(dia => {
+      agenda[dia] = {};
+      turnos.forEach(turno => {
+        agenda[dia][turno] = [];
+      });
+    });
+
+    agendamentos.forEach(agendamento => {
+      const data = new Date(agendamento.data_aula);
+      const dia = diasDaSemana[data.getDay()]; // getDay() retorna 0-6
+      const turno = agendamento.turno;
+
+      if (agenda[dia] && agenda[dia][turno]) {
+        agenda[dia][turno].push({
+          ...agendamento,
+          status: agendamento.status
+        });
+      }
+    });
+
+    return agenda;
   },
 
   /**
@@ -1167,7 +1245,7 @@ const DashboardSystem = {
    * @returns {Object} Estrutura de agenda organizada por dia e turno
    */
   processarAulasParaAgenda: (aulas) => {
-    const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
     const turnos = ['manhã', 'tarde', 'noite'];
 
     // Inicializar a agenda
@@ -1205,7 +1283,7 @@ const DashboardSystem = {
     const agendaContainer = DomElements.agendaContainer;
     if (!agendaContainer) return;
 
-    const diasDaSemana = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasDaSemana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
     const turnos = ['manhã', 'tarde', 'noite'];
 
     let tableHTML = `
@@ -1233,9 +1311,11 @@ const DashboardSystem = {
         if (aulasNoDiaETurno.length > 0) {
           aulasNoDiaETurno.forEach(aula => {
             tableHTML += `
-              <div class="aula-item" data-aula-id="${aula.id}">
-                <strong>${aula.instrumento}</strong> - ${aula.professor_nome}
-              </div>
+                <div class="aula-item ${aula.status === 'cancelada' ? 'cancelada' : ''}" 
+                      data-agendamento-id="${aula.id}">
+                    <strong>${aula.instrumento}</strong> - ${aula.professor_nome}
+                    <small>(${aula.status})</small>
+                </div>
             `;
           });
         } else {
@@ -1305,6 +1385,26 @@ const DashboardSystem = {
       document.body.removeChild(modal);
     });
 
+    // Adicionar event listener para o botão de ações de agendamento
+    modal.addEventListener('click', (e) => {
+      if (e.target.classList.contains('acoes-agendamento-btn')) {
+        const agendamentoId = e.target.getAttribute('data-agendamento-id');
+        // Fechar o modal atual primeiro
+        document.body.removeChild(modal);
+        // Abrir modal de ações
+        AulaSystem.showModalAcoesAgendamento(agendamentoId);
+      }
+
+      // Manter a funcionalidade existente do botão de visualização
+      if (e.target.classList.contains('view-aula-btn')) {
+        const aulaId = e.target.getAttribute('data-aula-id');
+        // Fechar o modal atual primeiro
+        document.body.removeChild(modal);
+        // Abrir detalhes da aula
+        AulaSystem.viewDetails(aulaId);
+      }
+    });
+
     // Se houver múltiplas aulas, adicionar event listeners para os botões de professor
     if (aulas.length > 1) {
       const professorSelector = modal.querySelector('#professorSelector');
@@ -1339,14 +1439,14 @@ const DashboardSystem = {
    * @returns {string} HTML con los detalles del aula
    */
   renderAulaDetalhes: (aula) => {
-    const diasSemanaMap = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
+    const diasSemanaMap = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
     const diasSemana = aula.dias_semana ? aula.dias_semana.map(dia => diasSemanaMap[dia]).join(', ') : '';
-    // separar string de alunos para um array: "ritielen,dengo" => ["ritielen", "dengo"]
     const alunosAula = aula.alunos ? aula.alunos.split(',').map(aluno => aluno.trim()) : [];
 
     return `
       <div class="aula-detalhe">
         <h3>${aula.instrumento} - Prof. ${aula.professor_nome}</h3>
+        <p><strong>Status:</strong> ${aula.status || 'agendada'}</p>
         <p><strong>Dias da semana:</strong> ${diasSemana}</p>
         <p><strong>Total de alunos:</strong> ${aula.total_alunos || 0}</p>
         
@@ -1358,9 +1458,14 @@ const DashboardSystem = {
       }
         </ul>
         
-        <button class="btn btn-primary view-aula-btn" data-aula-id="${aula.id}">
-          Ver detalhes completos da aula
-        </button>
+        <div class="action-buttons" style="margin-top: 20px; display: flex; gap: 10px;">
+          <button class="btn btn-primary view-aula-btn" data-aula-id="${aula.id}">
+            Ver detalhes completos
+          </button>
+          <button class="btn btn-info acoes-agendamento-btn" data-agendamento-id="${aula.id}">
+            Ações de Agendamento
+          </button>
+        </div>
       </div>
     `;
   },
@@ -1390,13 +1495,6 @@ const DashboardSystem = {
     const { firstDay, lastDay } = Utils.getWeekRange(AppState.currentWeek);
     DomElements.weekDisplay.textContent = `Semana: ${Utils.formatWeekRange(firstDay, lastDay)}`;
   },
-
-  /**
-   * Destrói os gráficos (mantido para compatibilidade)
-   */
-  destroyCharts: () => {
-    // Esta função é mantida para compatibilidade, mas os gráficos foram removidos
-  }
 };
 
 // ==============================================================
@@ -1428,7 +1526,8 @@ const AulaSystem = {
   viewDetails: async (aulaId) => {
     ModalSystem.close();
     try {
-      const aula = await ApiService.request(`/aulas/configuradas/${aulaId}`);
+      const agendamento = await ApiService.request(`/aulas/agendadas/${aulaId}`);
+      const aula = await ApiService.request(`/aulas/configuradas/${agendamento.aula_configurada_id}`);
       const alunosData = await ApiService.request('/alunos');
       const alunos = alunosData.alunos || alunosData;
 
@@ -1438,7 +1537,7 @@ const AulaSystem = {
       modal.innerHTML = `
                         <div class="modal-content" style="max-width: 600px;">
                             <span class="close">&times;</span>
-                            <h2>Detalhes da Aula</h2>
+                            <h2>Detalhes da Aula - ${Utils.formatDate(agendamento.data_aula)}</h2>
                             <p><strong>Instrumento:</strong> ${aula.instrumento}</p>
                             <p><strong>Turno:</strong> ${aula.turno}</p>
                             <p><strong>Professor:</strong> ${aula.professor_nome}</p>
@@ -1513,6 +1612,152 @@ const AulaSystem = {
       console.error('Erro ao carregar detalhes da aula:', error);
       ToastSystem.show(`Erro ao carregar detalhes da aula: ${error.message}`, 'error');
     }
+  },
+  showModalAcoesAgendamento: async (agendamentoId) => {
+    try {
+      const agendamento = await ApiService.request(`/aulas/agendadas/${agendamentoId}`);
+
+      const modal = document.createElement('div');
+      modal.className = 'modal';
+      modal.innerHTML = `
+            <div class="modal-content" style="max-width: 500px;">
+                <span class="close">&times;</span>
+                <h3>Ações para aula do dia ${Utils.formatDate(agendamento.data_aula)}</h3>
+                <p><strong>Status:</strong> ${agendamento.status}</p>
+                <p><strong>Instrumento:</strong> ${agendamento.instrumento}</p>
+                <p><strong>Professor:</strong> ${agendamento.professor_nome}</p>
+                
+                <div class="action-buttons" style="margin-top: 20px; display: flex; gap: 10px;">
+                    <button class="btn btn-danger" id="cancelarAulaBtn" 
+                            ${agendamento.status === 'cancelada' ? 'disabled' : ''}>
+                        Cancelar Aula
+                    </button>
+                    <button class="btn btn-warning" id="reagendarAulaBtn">
+                        Reagendar Aula
+                    </button>
+                </div>
+            </div>
+        `;
+
+      document.body.appendChild(modal);
+      modal.style.display = 'flex';
+
+      // Fechar modal
+      modal.querySelector('.close').addEventListener('click', () => {
+        document.body.removeChild(modal);
+      });
+
+      // Evento para cancelar
+      modal.querySelector('#cancelarAulaBtn').addEventListener('click', () => {
+        document.body.removeChild(modal);
+        AulaSystem.cancelarAula(agendamentoId);
+      });
+
+      // Evento para reagendar
+      modal.querySelector('#reagendarAulaBtn').addEventListener('click', () => {
+        document.body.removeChild(modal);
+        AulaSystem.reagendarAula(agendamentoId);
+      });
+
+    } catch (error) {
+      console.error('Erro ao carregar agendamento:', error);
+      ToastSystem.show('Erro ao carregar agendamento', 'error');
+    }
+  },
+
+  cancelarAula: async (agendamentoId) => {
+    // Mostrar modal de cancelamento
+    const modal = document.getElementById('modalCancelar');
+    modal.style.display = 'block';
+
+    // Limpar campo anterior
+    document.getElementById('motivoCancelamento').value = '';
+
+    // Configurar eventos do modal
+    const closeModal = () => {
+      modal.style.display = 'none';
+    };
+
+    // Fechar modal
+    document.querySelector('#modalCancelar .close-modal').onclick = closeModal;
+    document.getElementById('cancelarCancelamentoBtn').onclick = closeModal;
+
+    // Confirmar cancelamento
+    document.getElementById('confirmarCancelamentoBtn').onclick = async () => {
+      const motivo = document.getElementById('motivoCancelamento').value;
+      if (!motivo) {
+        ToastSystem.show('Por favor, informe o motivo do cancelamento.', 'warning');
+        return;
+      }
+
+      try {
+        await ApiService.request(`/aulas/agendadas/${agendamentoId}/cancelar`, 'PUT', {
+          motivo: motivo
+        });
+        ToastSystem.show('Aula cancelada com sucesso', 'success');
+        DashboardSystem.loadAgenda();
+        closeModal();
+      } catch (error) {
+        ToastSystem.show('Erro ao cancelar aula', 'error');
+      }
+    };
+  },
+
+  reagendarAula: async (agendamentoId) => {
+    // Mostrar modal de reagendamento
+    const modal = document.getElementById('modalReagendar');
+    modal.style.display = 'block';
+
+    // Limpar campos anteriores
+    document.getElementById('novaData').value = '';
+    document.getElementById('motivoReagendamento').value = '';
+
+    // Configurar data mínima como amanhã
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    document.getElementById('novaData').min = tomorrow.toISOString().split('T')[0];
+
+    // Configurar eventos do modal
+    const closeModal = () => {
+      modal.style.display = 'none';
+    };
+
+    // Fechar modal
+    document.querySelector('#modalReagendar .close-modal').onclick = closeModal;
+    document.getElementById('cancelarReagendamentoBtn').onclick = closeModal;
+
+    // Confirmar reagendamento
+    document.getElementById('confirmarReagendamentoBtn').onclick = async () => {
+      const novaData = document.getElementById('novaData').value;
+      const motivo = document.getElementById('motivoReagendamento').value;
+
+      if (!novaData || !motivo) {
+        ToastSystem.show('Por favor, preencha todos os campos.', 'warning');
+        return;
+      }
+
+      // Validar se a data é futura
+      const selectedDate = new Date(novaData);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (selectedDate <= today) {
+        ToastSystem.show('A nova data deve ser futura.', 'warning');
+        return;
+      }
+
+      try {
+        await ApiService.request(`/aulas/agendadas/${agendamentoId}/reagendar`, 'PUT', {
+          nova_data: novaData,
+          motivo: motivo
+        });
+        ToastSystem.show('Aula reagendada com sucesso', 'success');
+        DashboardSystem.loadAgenda();
+        closeModal();
+      } catch (error) {
+        ToastSystem.show('Erro ao reagendar aula', 'error');
+      }
+    };
   }
 };
 
@@ -1801,12 +2046,26 @@ const setupEventListeners = () => {
   if (confirmCancel) {
     confirmCancel.addEventListener('click', ModalSystem.close);
   }
+
+  window.addEventListener('click', (e) => {
+    const modalCancelar = document.getElementById('modalCancelar');
+    const modalReagendar = document.getElementById('modalReagendar');
+
+    if (e.target === modalCancelar) {
+      modalCancelar.style.display = 'none';
+    }
+
+    if (e.target === modalReagendar) {
+      modalReagendar.style.display = 'none';
+    }
+  });
 };
 
 /**
  * Inicializa a aplicação
  */
 const initApp = async () => {
+  Utils.verifyTheme()
   // Mostra o loader
   if (DomElements.loader) DomElements.loader.style.display = 'flex';
   if (DomElements.loginContainer) DomElements.loginContainer.style.display = 'none';
