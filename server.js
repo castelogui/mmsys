@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const fs = require('fs');
+require('dotenv').config();
 
 // ==============================================================
 // CONFIGURAÇÕES E INICIALIZAÇÃO
@@ -58,43 +59,63 @@ const Database = {
    * Inicializa a conexão com o banco de dados
    */
   initialize: async function () {
-    console.log(`Inicializando banco de dados. Modo: ${this.isPostgreSQL ? 'PostgreSQL' : 'SQLite'}`);
-    
     if (this.isPostgreSQL) {
-      // Configuração PostgreSQL para produção
-      const { Client } = require('pg');
-      this.db = new Client({
-        connectionString: process.env.DATABASE_URL || "postgresql://postgres:[YOUR-PASSWORD]@db.raxextmpojeoxncbuqtu.supabase.co:5432/postgres",
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-      });
-
       try {
+        const { Client } = require('pg');
+
+        // Verificar se a DATABASE_URL está disponível
+        const connectionString = process.env.DATABASE_URL;
+        if (!connectionString) {
+          console.error('DATABASE_URL não encontrada nas variáveis de ambiente');
+          console.log('Usando SQLite como fallback');
+          this.isPostgreSQL = false;
+          return this.initializeSQLite();
+        }
+
+        console.log('Inicializando banco de dados. Modo: PostgreSQL');
+
+        // Configuração PostgreSQL para produção
+        this.db = new Client({
+          connectionString: connectionString,
+          ssl: { rejectUnauthorized: false }
+        });
+
         await this.db.connect();
         console.log('Conectado ao PostgreSQL com sucesso');
         await this.createTables();
       } catch (err) {
-        console.error('Erro ao conectar ao PostgreSQL:', err);
+        console.error('Erro ao conectar ao PostgreSQL:', err.message);
+        console.log('Falha na conexão PostgreSQL, usando SQLite como fallback');
+        this.isPostgreSQL = false;
+        return this.initializeSQLite();
       }
     } else {
-      // Configuração SQLite para desenvolvimento
-      const sqlite3 = require('sqlite3').verbose();
-      const dbPath = './database/sqlite.db';
-
-      // Garantir que o diretório existe
-      const dir = path.dirname(dbPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      this.db = new sqlite3.Database(dbPath, (err) => {
-        if (err) {
-          console.error('Erro ao conectar ao SQLite:', err.message);
-        } else {
-          console.log('Conectado ao SQLite com sucesso');
-          this.createTables();
-        }
-      });
+      return this.initializeSQLite();
     }
+  },
+
+  /**
+   * Inicializa o SQLite para desenvolvimento/fallback
+   */
+  initializeSQLite: function () {
+    console.log('Inicializando banco de dados. Modo: SQLite');
+    const sqlite3 = require('sqlite3').verbose();
+    const dbPath = './database/sqlite.db';
+
+    // Garantir que o diretório existe
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    this.db = new sqlite3.Database(dbPath, (err) => {
+      if (err) {
+        console.error('Erro ao conectar ao SQLite:', err.message);
+      } else {
+        console.log('Conectado ao SQLite com sucesso');
+        this.createTables();
+      }
+    });
   },
 
   /**
@@ -301,8 +322,16 @@ const Database = {
    */
   run: function (sql, params = []) {
     if (this.isPostgreSQL) {
-      return this.db.query(sql, params)
-        .then(result => ({ id: result.rows[0]?.id, changes: result.rowCount }))
+      // Converter placeholders '?' para $1, $2, ...
+      let convertedSQL = sql;
+      let paramIndex = 1;
+      convertedSQL = sql.replace(/\?/g, () => `$${paramIndex++}`);
+
+      return this.db.query(convertedSQL, params)
+        .then(result => ({
+          id: result.rows[0] ? result.rows[0].id : null,
+          changes: result.rowCount
+        }))
         .catch(err => { throw err; });
     } else {
       return new Promise((resolve, reject) => {
@@ -322,7 +351,12 @@ const Database = {
    */
   get: function (sql, params = []) {
     if (this.isPostgreSQL) {
-      return this.db.query(sql, params)
+      // Converter placeholders '?' para $1, $2, ...
+      let convertedSQL = sql;
+      let paramIndex = 1;
+      convertedSQL = sql.replace(/\?/g, () => `$${paramIndex++}`);
+
+      return this.db.query(convertedSQL, params)
         .then(result => result.rows[0])
         .catch(err => { throw err; });
     } else {
@@ -343,7 +377,12 @@ const Database = {
    */
   all: function (sql, params = []) {
     if (this.isPostgreSQL) {
-      return this.db.query(sql, params)
+      // Converter placeholders '?' para $1, $2, ...
+      let convertedSQL = sql;
+      let paramIndex = 1;
+      convertedSQL = sql.replace(/\?/g, () => `$${paramIndex++}`);
+
+      return this.db.query(convertedSQL, params)
         .then(result => result.rows)
         .catch(err => { throw err; });
     } else {
@@ -471,10 +510,14 @@ const GenericHandlers = {
           const placeholders = Object.keys(data).map(() => '?').join(', ');
           const values = Object.values(data);
 
-          const result = await Database.run(
-            `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`,
-            values
-          );
+          // Para PostgreSQL, precisamos ajustar a query para retornar o ID inserido
+          let query = `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`;
+
+          if (Database.isPostgreSQL) {
+            query += ' RETURNING id';
+          }
+
+          const result = await Database.run(query, values);
 
           res.status(201).json({
             id: result.id,
@@ -596,6 +639,9 @@ const AulasHandlers = {
   /**
    * Configura uma nova aula
    */
+  /**
+ * Configura uma nova aula
+ */
   configurar: async (req, res) => {
     try {
       const { instrumento, turno, professor_id, data_inicio, dias_semana } = req.body;
@@ -616,8 +662,14 @@ const AulasHandlers = {
       }
 
       // Inserir a configuração da aula
+      let query = 'INSERT INTO aulas_configuradas (instrumento, turno, professor_id, data_inicio) VALUES (?, ?, ?, ?)';
+
+      if (Database.isPostgreSQL) {
+        query += ' RETURNING id';
+      }
+
       const result = await Database.run(
-        'INSERT INTO aulas_configuradas (instrumento, turno, professor_id, data_inicio) VALUES (?, ?, ?, ?)',
+        query,
         [instrumento, turno, professor_id, data_inicio]
       );
 
@@ -628,7 +680,7 @@ const AulasHandlers = {
         if (dia < 0 || dia > 6) {
           // Se houver erro, remover a aula criada
           await Database.run('DELETE FROM aulas_configuradas WHERE id = ?', [aulaId]);
-          return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) e 6 (sábado)' });
+          return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) и 6 (sábado)' });
         }
 
         await Database.run(
@@ -647,11 +699,19 @@ const AulasHandlers = {
           const diffDias = (dia - dataAula.getDay() + 7) % 7 + (semana * 7);
           dataAula.setDate(dataAula.getDate() + diffDias);
 
-          // Inserir agendamento
-          await Database.run(
-            'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula) VALUES (?, ?)',
+          // Verificar se já existe agendamento para esta data
+          const existe = await Database.get(
+            'SELECT id FROM aulas_agendadas WHERE aula_configurada_id = ? AND data_aula = ?',
             [aulaId, dataAula.toISOString().split('T')[0]]
           );
+
+          if (!existe) {
+            // Inserir agendamento
+            await Database.run(
+              'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula) VALUES (?, ?)',
+              [aulaId, dataAula.toISOString().split('T')[0]]
+            );
+          }
         }
       }
 
@@ -669,39 +729,46 @@ const AulasHandlers = {
    */
   listarConfiguradas: async (req, res) => {
     try {
-      // Ajustar a query para funcionar em ambos os bancos
       const isPostgreSQL = Database.isPostgreSQL;
-      const groupConcatFunction = isPostgreSQL ? 'STRING_AGG' : 'GROUP_CONCAT';
-      const groupConcatParams = isPostgreSQL ? 'DISTINCT ads.dia_semana::text, \',\')' : 'DISTINCT ads.dia_semana';
 
       const query = `
-        SELECT 
-          ac.*,
-          p.nome as professor_nome,
-          ${groupConcatFunction}(${groupConcatParams}) as dias_semana,
-          COUNT(DISTINCT aa.aluno_id) as total_alunos,
-          COUNT(DISTINCT ag.id) as total_agendadas,
-          SUM(CASE WHEN ag.status = 'cancelada' THEN 1 ELSE 0 END) as total_canceladas
-        FROM aulas_configuradas ac
-        LEFT JOIN professores p ON ac.professor_id = p.id
-        LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
-        LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
-        LEFT JOIN aulas_agendadas ag ON ac.id = ag.aula_configurada_id
-        GROUP BY ac.id ${isPostgreSQL ? ', p.nome' : ''}
-        ORDER BY ac.created_at DESC
-      `;
+      SELECT 
+        ac.*,
+        p.nome as professor_nome,
+        (
+          SELECT ${isPostgreSQL ? "STRING_AGG(dia_semana::text, ',')" : "GROUP_CONCAT(dia_semana)"}
+          FROM aulas_dias_semana 
+          WHERE aula_id = ac.id
+        ) as dias_semana,
+        (
+          SELECT COUNT(*) 
+          FROM aulas_alunos 
+          WHERE aula_id = ac.id
+        ) as total_alunos,
+        (
+          SELECT COUNT(*) 
+          FROM aulas_agendadas 
+          WHERE aula_configurada_id = ac.id
+        ) as total_agendadas,
+        (
+          SELECT COUNT(*) 
+          FROM aulas_agendadas 
+          WHERE aula_configurada_id = ac.id AND status = 'cancelada'
+        ) as total_canceladas
+      FROM aulas_configuradas ac
+      LEFT JOIN professores p ON ac.professor_id = p.id
+      ORDER BY ac.created_at DESC
+    `;
 
       const rows = await Database.all(query);
 
       // Processar os dias da semana
-      const aulas = rows.map(aula => {
-        return {
-          ...aula,
-          dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
-        };
-      });
+      const aulas = rows.map(aula => ({
+        ...aula,
+        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+      }));
 
-      res.json({ aulas: aulas });
+      res.json({ aulas });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -829,38 +896,33 @@ const AulasHandlers = {
   obterAulasAluno: async (req, res) => {
     try {
       const { alunoId } = req.params;
-
-      // Ajustar a query para funcionar em ambos os bancos
       const isPostgreSQL = Database.isPostgreSQL;
-      const groupConcatFunction = isPostgreSQL ? 'STRING_AGG' : 'GROUP_CONCAT';
-      const groupConcatParams = isPostgreSQL ? 'ads.dia_semana::text, \',\')' : 'ads.dia_semana';
 
       const query = `
-        SELECT 
-          ac.*,
-          p.nome as professor_nome,
-          p.especialidade as professor_especialidade,
-          ${groupConcatFunction}(${groupConcatParams}) as dias_semana
-        FROM aulas_alunos aa
-        LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id
-        LEFT JOIN professores p ON ac.professor_id = p.id
-        LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
-        WHERE aa.aluno_id = ?
-        GROUP BY ac.id ${isPostgreSQL ? ', p.nome, p.especialidade' : ''}
-        ORDER BY ac.created_at DESC
-      `;
+      SELECT 
+        ac.*,
+        p.nome as professor_nome,
+        p.especialidade as professor_especialidade,
+        (
+          SELECT ${isPostgreSQL ? "STRING_AGG(dia_semana::text, ',')" : "GROUP_CONCAT(dia_semana)"}
+          FROM aulas_dias_semana 
+          WHERE aula_id = ac.id
+        ) as dias_semana
+      FROM aulas_alunos aa
+      LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id
+      LEFT JOIN professores p ON ac.professor_id = p.id
+      WHERE aa.aluno_id = ?
+      ORDER BY ac.created_at DESC
+    `;
 
       const rows = await Database.all(query, [alunoId]);
 
-      // Processar os dias da semana
-      const aulas = rows.map(aula => {
-        return {
-          ...aula,
-          dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
-        };
-      });
+      const aulas = rows.map(aula => ({
+        ...aula,
+        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+      }));
 
-      res.json({ aulas: aulas });
+      res.json({ aulas });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -872,36 +934,34 @@ const AulasHandlers = {
   obterAulasProfessor: async (req, res) => {
     try {
       const { professorId } = req.params;
-
-      // Ajustar a query para funcionar em ambos os bancos
       const isPostgreSQL = Database.isPostgreSQL;
-      const groupConcatFunction = isPostgreSQL ? 'STRING_AGG' : 'GROUP_CONCAT';
-      const groupConcatParams = isPostgreSQL ? 'ads.dia_semana::text, \',\')' : 'ads.dia_semana';
 
       const query = `
-        SELECT 
-          ac.*,
-          ${groupConcatFunction}(${groupConcatParams}) as dias_semana,
-          COUNT(aa.aluno_id) as total_alunos
-        FROM aulas_configuradas ac
-        LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
-        LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
-        WHERE ac.professor_id = ?
-        GROUP BY ac.id
-        ORDER BY ac.created_at DESC
-      `;
+      SELECT 
+        ac.*,
+        (
+          SELECT ${isPostgreSQL ? "STRING_AGG(dia_semana::text, ',')" : "GROUP_CONCAT(dia_semana)"}
+          FROM aulas_dias_semana 
+          WHERE aula_id = ac.id
+        ) as dias_semana,
+        (
+          SELECT COUNT(*) 
+          FROM aulas_alunos 
+          WHERE aula_id = ac.id
+        ) as total_alunos
+      FROM aulas_configuradas ac
+      WHERE ac.professor_id = ?
+      ORDER BY ac.created_at DESC
+    `;
 
       const rows = await Database.all(query, [professorId]);
 
-      // Processar os dias da semana
-      const aulas = rows.map(aula => {
-        return {
-          ...aula,
-          dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
-        };
-      });
+      const aulas = rows.map(aula => ({
+        ...aula,
+        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+      }));
 
-      res.json({ aulas: aulas });
+      res.json({ aulas });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1068,30 +1128,25 @@ const AulasHandlers = {
     try {
       const { id } = req.params;
       const { data_inicio, data_fim } = req.query;
-
-      // Verificar se a aula existe
-      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
-      if (!aula) {
-        return res.status(404).json({ error: 'Aula não encontrada' });
-      }
+      const isPostgreSQL = Database.isPostgreSQL;
 
       let query = `
-            SELECT aa.*, ar.nova_data, ar.motivo
-            FROM aulas_agendadas aa
-            LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
-            WHERE aa.aula_configurada_id = ?
-          `;
+      SELECT aa.*, ar.nova_data, ar.motivo
+      FROM aulas_agendadas aa
+      LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
+      WHERE aa.aula_configurada_id = ${isPostgreSQL ? '$1' : '?'}
+    `;
+
       let params = [id];
 
       if (data_inicio && data_fim) {
-        query += ' AND aa.data_aula BETWEEN ? AND ?';
+        query += ` AND aa.data_aula BETWEEN ${isPostgreSQL ? '$2 AND $3' : '? AND ?'}`;
         params.push(data_inicio, data_fim);
       }
 
       query += ' ORDER BY aa.data_aula';
 
       const agendamentos = await Database.all(query, params);
-
       res.json({ agendamentos });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1198,6 +1253,7 @@ const AulasHandlers = {
   obterAgendaSemanal: async (req, res) => {
     try {
       const { data_inicio } = req.query;
+      const isPostgreSQL = Database.isPostgreSQL;
 
       // Se não fornecer data_início, usa a segunda-feira da semana atual
       let inicioSemana;
@@ -1205,7 +1261,6 @@ const AulasHandlers = {
         inicioSemana = new Date(data_inicio);
       } else {
         inicioSemana = new Date();
-        // Ajustar para segunda-feira
         const dia = inicioSemana.getDay();
         const diff = inicioSemana.getDate() - dia + (dia === 0 ? -6 : 1);
         inicioSemana.setDate(diff);
@@ -1228,14 +1283,16 @@ const AulasHandlers = {
       INNER JOIN aulas_configuradas ac ON aa.aula_configurada_id = ac.id
       INNER JOIN professores p ON ac.professor_id = p.id
       LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
-      WHERE aa.data_aula BETWEEN ? AND ?
+      WHERE aa.data_aula BETWEEN ${isPostgreSQL ? '$1 AND $2' : '? AND ?'}
       ORDER BY aa.data_aula, ac.turno
     `;
 
-      const agendamentos = await Database.all(query, [
+      const params = [
         inicioSemana.toISOString().split('T')[0],
         fimSemana.toISOString().split('T')[0]
-      ]);
+      ];
+
+      const agendamentos = await Database.all(query, params);
 
       res.json({
         semana_inicio: inicioSemana.toISOString().split('T')[0],
@@ -1287,7 +1344,7 @@ const FinanceiroHandlers = {
       `;
 
       const rows = await Database.all(query);
-      res.json({ pagamentos: rows });
+      res.json(rows);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1421,8 +1478,8 @@ const FinanceiroHandlers = {
   },
 
   /**
-   * Processa um pagamento
-   */
+ * Processa um pagamento
+ */
   processarPagamento: async (req, res) => {
     try {
       const { id } = req.params;
@@ -1451,8 +1508,8 @@ const FinanceiroHandlers = {
 
       // Atualizar o pagamento
       await Database.run(
-        'UPDATE pagamentos SET status = "pago", data_pagamento = ?, valor_repasse = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [data_pagamento || new Date().toISOString(), valor_repasse, id]
+        'UPDATE pagamentos SET status = $1, data_pagamento = $2, valor_repasse = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4',
+        ['pago', data_pagamento || new Date().toISOString(), valor_repasse, id]
       );
 
       res.json({ message: 'Pagamento processado com sucesso', valor_repasse });
@@ -1487,8 +1544,12 @@ app.get('/api/relatorios/resumo', async (req, res) => {
       totalProfessores: 'SELECT COUNT(*) as total FROM professores',
       totalAulasConfiguradas: 'SELECT COUNT(*) as total FROM aulas_configuradas',
       receitaMensal: isPostgreSQL
-        ? `SELECT SUM(valor) as total FROM pagamentos WHERE status = 'pago' AND EXTRACT(YEAR FROM data_pagamento) = EXTRACT(YEAR FROM NOW()) AND EXTRACT(MONTH FROM data_pagamento) = EXTRACT(MONTH FROM NOW())`
-        : `SELECT SUM(valor) as total FROM pagamentos WHERE status = 'pago' AND strftime('%Y', data_pagamento) = strftime('%Y', 'now') AND strftime('%m', data_pagamento) = strftime('%m', 'now')`
+        ? `SELECT COALESCE(SUM(valor), 0) as total FROM pagamentos WHERE status = 'pago' 
+           AND EXTRACT(YEAR FROM data_pagamento::date) = EXTRACT(YEAR FROM CURRENT_DATE)
+           AND EXTRACT(MONTH FROM data_pagamento::date) = EXTRACT(MONTH FROM CURRENT_DATE)`
+        : `SELECT COALESCE(SUM(valor), 0) as total FROM pagamentos WHERE status = 'pago' 
+           AND strftime('%Y', data_pagamento) = strftime('%Y', 'now') 
+           AND strftime('%m', data_pagamento) = strftime('%m', 'now')`
     };
 
     const results = {};
