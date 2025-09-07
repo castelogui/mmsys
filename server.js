@@ -5,7 +5,6 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const fs = require('fs');
-require('dotenv').config();
 
 // ==============================================================
 // CONFIGURAÇÕES E INICIALIZAÇÃO
