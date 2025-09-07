@@ -4,7 +4,9 @@
 
 // Configurações da aplicação
 const AppConfig = {
-  API_BASE_URL: window.location.origin,
+  API_BASE_URL: window.location.origin.includes('localhost')
+    ? 'http://localhost:3000'
+    : window.location.origin,
   TOKEN_PREFIX: 'simulated-jwt-token-'
 };
 
@@ -406,6 +408,7 @@ const ApiService = {
     }
 
     const url = `${AppConfig.API_BASE_URL}${endpoint}`;
+    console.log(`API Request: ${method} ${url}`, data);
     const options = {
       method,
       headers: {
@@ -419,24 +422,15 @@ const ApiService = {
 
     try {
       const response = await fetch(url, options);
+      const text = await response.text();
 
       if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error(`Rota não encontrada: ${endpoint}`);
-        }
-
-        const error = await response.json().catch(() => ({ error: 'Erro desconhecido' }));
-        throw new Error(error.error || `Erro ${response.status}: ${response.statusText}`);
+        throw new Error(`HTTP ${response.status}: ${text}`);
       }
 
-      // Para respostas vazias (como em DELETE)
-      if (response.status === 204) {
-        return null;
-      }
-
-      return await response.json();
+      return text ? JSON.parse(text) : null;
     } catch (error) {
-      console.error(`Erro na requisição ${method} ${endpoint}:`, error);
+      console.error('API Request Failed:', error);
       throw error;
     }
   },
@@ -450,7 +444,7 @@ const ApiService = {
   loadEntityData: async (entity, tableId) => {
     try {
       const data = await ApiService.request(`/${entity}`);
-      const items = data[entity] || data;
+      const items = Array.isArray(data) ? data : data[entity] || data.items || [];
       TableSystem.render(items, tableId, entity);
       return items;
     } catch (error) {
