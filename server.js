@@ -516,11 +516,13 @@ const AulasHandlers = {
             ac.*,
             p.nome as professor_nome,
             GROUP_CONCAT(DISTINCT ads.dia_semana ORDER BY ads.dia_semana) as dias_semana,
-            COUNT(DISTINCT aa.aluno_id) as total_alunos
+            COUNT(DISTINCT aa.aluno_id) as total_alunos,
+            GROUP_CONCAT(DISTINCT a.nome) as alunos
         FROM aulas_configuradas ac
         LEFT JOIN professores p ON ac.professor_id = p.id
         LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
         LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
+        LEFT JOIN alunos a ON aa.aluno_id = a.id
         GROUP BY ac.id
         ORDER BY ac.created_at DESC
       `;
