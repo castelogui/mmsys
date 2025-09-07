@@ -139,6 +139,26 @@ const Database = {
         UNIQUE(aula_id, aluno_id)
       )`,
 
+      `CREATE TABLE IF NOT EXISTS aulas_agendadas (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          aula_configurada_id INTEGER NOT NULL,
+          data_aula DATE NOT NULL,
+          status TEXT DEFAULT 'agendada' CHECK(status IN ('agendada', 'cancelada', 'realizada', 'reagendada')),
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (aula_configurada_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
+          UNIQUE(aula_configurada_id, data_aula)
+      )`,
+
+      `CREATE TABLE IF NOT EXISTS aulas_reagendamentos (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          aula_agendada_id INTEGER NOT NULL,
+          nova_data DATE NOT NULL,
+          motivo TEXT,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (aula_agendada_id) REFERENCES aulas_agendadas (id) ON DELETE CASCADE
+      )`,
+
       `CREATE TABLE IF NOT EXISTS pagamentos (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         aluno_id INTEGER,
@@ -497,6 +517,24 @@ const AulasHandlers = {
         );
       }
 
+      // Após inserir os dias da semana, adicione:
+      // Gerar agendamento para as próximas 4 semanas
+      const dataInicio = new Date(data_inicio);
+      for (let semana = 0; semana < 4; semana++) {
+        for (const dia of dias_semana) {
+          // Calcular data da aula (dia da semana + semana)
+          const dataAula = new Date(dataInicio);
+          const diffDias = (dia - dataAula.getDay() + 7) % 7 + (semana * 7);
+          dataAula.setDate(dataAula.getDate() + diffDias);
+
+          // Inserir agendamento
+          await Database.run(
+            'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula) VALUES (?, ?)',
+            [aulaId, dataAula.toISOString().split('T')[0]]
+          );
+        }
+      }
+
       res.status(201).json({
         id: aulaId,
         message: 'Aula configurada com sucesso'
@@ -511,18 +549,20 @@ const AulasHandlers = {
    */
   listarConfiguradas: async (req, res) => {
     try {
+      // Substitua a query atual por esta:
       const query = `
         SELECT 
-            ac.*,
-            p.nome as professor_nome,
-            GROUP_CONCAT(DISTINCT ads.dia_semana ORDER BY ads.dia_semana) as dias_semana,
-            COUNT(DISTINCT aa.aluno_id) as total_alunos,
-            GROUP_CONCAT(DISTINCT a.nome) as alunos
+          ac.*,
+          p.nome as professor_nome,
+          GROUP_CONCAT(DISTINCT ads.dia_semana ORDER BY ads.dia_semana) as dias_semana,
+          COUNT(DISTINCT aa.aluno_id) as total_alunos,
+          COUNT(DISTINCT ag.id) as total_agendadas,
+          SUM(CASE WHEN ag.status = 'cancelada' THEN 1 ELSE 0 END) as total_canceladas
         FROM aulas_configuradas ac
         LEFT JOIN professores p ON ac.professor_id = p.id
         LEFT JOIN aulas_dias_semana ads ON ac.id = ads.aula_id
         LEFT JOIN aulas_alunos aa ON ac.id = aa.aula_id
-        LEFT JOIN alunos a ON aa.aluno_id = a.id
+        LEFT JOIN aulas_agendadas ag ON ac.id = ag.aula_configurada_id
         GROUP BY ac.id
         ORDER BY ac.created_at DESC
       `;
@@ -823,6 +863,254 @@ const AulasHandlers = {
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
+  },
+
+  /**
+ * Gera o agendamento de aulas com base na configuração
+ */
+  gerarAgendamento: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { semanas } = req.body; // Número de semanas a gerar
+
+      // Verificar se a aula existe
+      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      if (!aula) {
+        return res.status(404).json({ error: 'Aula não encontrada' });
+      }
+
+      // Obter dias da semana configurados
+      const diasRows = await Database.all(
+        'SELECT dia_semana FROM aulas_dias_semana WHERE aula_id = ?',
+        [id]
+      );
+      const dias_semana = diasRows.map(row => row.dia_semana);
+
+      if (dias_semana.length === 0) {
+        return res.status(400).json({ error: 'Aula não possui dias da semana configurados' });
+      }
+
+      const dataInicio = new Date(aula.data_inicio);
+      const agendamentos = [];
+
+      // Gerar agendamentos para as próximas semanas
+      for (let semana = 0; semana < (semanas || 4); semana++) {
+        for (const dia of dias_semana) {
+          // Calcular data da aula (dia da semana + semana)
+          const dataAula = new Date(dataInicio);
+          const diffDias = (dia - dataAula.getDay() + 7) % 7 + (semana * 7);
+          dataAula.setDate(dataAula.getDate() + diffDias);
+
+          // Verificar se já existe agendamento para esta data
+          const existe = await Database.get(
+            'SELECT id FROM aulas_agendadas WHERE aula_configurada_id = ? AND data_aula = ?',
+            [id, dataAula.toISOString().split('T')[0]]
+          );
+
+          if (!existe) {
+            // Inserir agendamento
+            const result = await Database.run(
+              'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula) VALUES (?, ?)',
+              [id, dataAula.toISOString().split('T')[0]]
+            );
+            agendamentos.push({ id: result.id, data_aula: dataAula.toISOString().split('T')[0] });
+          }
+        }
+      }
+
+      res.json({
+        message: `Agendamento gerado para ${agendamentos.length} aulas`,
+        agendamentos
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Obtém o agendamento de aulas para um período
+   */
+  obterAgendamento: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { data_inicio, data_fim } = req.query;
+
+      // Verificar se a aula existe
+      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      if (!aula) {
+        return res.status(404).json({ error: 'Aula não encontrada' });
+      }
+
+      let query = `
+            SELECT aa.*, ar.nova_data, ar.motivo
+            FROM aulas_agendadas aa
+            LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
+            WHERE aa.aula_configurada_id = ?
+          `;
+      let params = [id];
+
+      if (data_inicio && data_fim) {
+        query += ' AND aa.data_aula BETWEEN ? AND ?';
+        params.push(data_inicio, data_fim);
+      }
+
+      query += ' ORDER BY aa.data_aula';
+
+      const agendamentos = await Database.all(query, params);
+
+      res.json({ agendamentos });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  obterUmAgendamento: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const agendamento = await Database.get(
+        `SELECT aa.*, ac.instrumento, p.nome as professor_nome 
+             FROM aulas_agendadas aa
+             INNER JOIN aulas_configuradas ac ON aa.aula_configurada_id = ac.id
+             INNER JOIN professores p ON ac.professor_id = p.id
+             WHERE aa.id = ?`,
+        [id]
+      );
+
+      if (!agendamento) {
+        return res.status(404).json({ error: 'Agendamento não encontrado' });
+      }
+
+      res.json(agendamento);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Cancela uma aula agendada
+   */
+  cancelarAula: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { motivo } = req.body;
+
+      // Verificar se o agendamento existe
+      const agendamento = await Database.get('SELECT * FROM aulas_agendadas WHERE id = ?', [id]);
+      if (!agendamento) {
+        return res.status(404).json({ error: 'Agendamento não encontrado' });
+      }
+
+      // Atualizar status para cancelada
+      await Database.run(
+        'UPDATE aulas_agendadas SET status = "cancelada", updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [id]
+      );
+
+      res.json({ message: 'Aula cancelada com sucesso' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Reagenda uma aula
+   */
+  reagendarAula: async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { nova_data, motivo } = req.body;
+
+      // Verificar se o agendamento existe
+      const agendamento = await Database.get('SELECT * FROM aulas_agendadas WHERE id = ?', [id]);
+      if (!agendamento) {
+        return res.status(404).json({ error: 'Agendamento não encontrado' });
+      }
+
+      // Verificar se a nova data é válida
+      if (!nova_data || new Date(nova_data) <= new Date()) {
+        return res.status(400).json({ error: 'Nova data inválida' });
+      }
+
+      // Registrar o reagendamento
+      await Database.run(
+        'INSERT INTO aulas_reagendamentos (aula_agendada_id, nova_data, motivo) VALUES (?, ?, ?)',
+        [id, nova_data, motivo]
+      );
+
+      // Atualizar status do agendamento original
+      await Database.run(
+        'UPDATE aulas_agendadas SET status = "reagendada", updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [id]
+      );
+
+      // Criar novo agendamento para a nova data
+      const result = await Database.run(
+        'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula, status) VALUES (?, ?, "agendada")',
+        [agendamento.aula_configurada_id, nova_data]
+      );
+
+      res.json({
+        message: 'Aula reagendada com sucesso',
+        novo_agendamento_id: result.id
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+
+  /**
+   * Obtém a agenda semanal
+   */
+  obterAgendaSemanal: async (req, res) => {
+    try {
+      const { data_inicio } = req.query;
+
+      // Se não fornecer data_início, usa a segunda-feira da semana atual
+      let inicioSemana;
+      if (data_inicio) {
+        inicioSemana = new Date(data_inicio);
+      } else {
+        inicioSemana = new Date();
+        // Ajustar para segunda-feira
+        const dia = inicioSemana.getDay();
+        const diff = inicioSemana.getDate() - dia + (dia === 0 ? -6 : 1);
+        inicioSemana.setDate(diff);
+      }
+
+      // Calcular fim da semana (domingo)
+      const fimSemana = new Date(inicioSemana);
+      fimSemana.setDate(inicioSemana.getDate() + 6);
+
+      const query = `
+      SELECT 
+        aa.*,
+        ac.instrumento,
+        ac.turno,
+        p.nome as professor_nome,
+        p.especialidade as professor_especialidade,
+        ar.nova_data,
+        ar.motivo
+      FROM aulas_agendadas aa
+      INNER JOIN aulas_configuradas ac ON aa.aula_configurada_id = ac.id
+      INNER JOIN professores p ON ac.professor_id = p.id
+      LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
+      WHERE aa.data_aula BETWEEN ? AND ?
+      ORDER BY aa.data_aula, ac.turno
+    `;
+
+      const agendamentos = await Database.all(query, [
+        inicioSemana.toISOString().split('T')[0],
+        fimSemana.toISOString().split('T')[0]
+      ]);
+
+      res.json({
+        semana_inicio: inicioSemana.toISOString().split('T')[0],
+        semana_fim: fimSemana.toISOString().split('T')[0],
+        agendamentos
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   }
 };
 
@@ -839,6 +1127,13 @@ app.get('/api/alunos/:alunoId/aulas', AulasHandlers.obterAulasAluno);
 app.get('/api/professores/:professorId/aulas', AulasHandlers.obterAulasProfessor);
 app.put('/api/aulas/configuradas/:id', AulasHandlers.atualizarAula);
 app.delete('/api/aulas/configuradas/:id', AulasHandlers.excluirAula);
+// Rotas para agendamento de aulas
+app.post('/api/aulas/configuradas/:id/gerar-agendamento', AulasHandlers.gerarAgendamento);
+app.get('/api/aulas/configuradas/:id/agendamento', AulasHandlers.obterAgendamento);
+app.put('/api/aulas/agendadas/:id/cancelar', AulasHandlers.cancelarAula);
+app.put('/api/aulas/agendadas/:id/reagendar', AulasHandlers.reagendarAula);
+app.get('/api/aulas/agenda-semanal', AulasHandlers.obterAgendaSemanal);
+app.get('/api/aulas/agendadas/:id', AulasHandlers.obterUmAgendamento);
 
 // ==============================================================
 // HANDLERS PARA FINANCEIRO
