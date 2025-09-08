@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
 const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
 // ==============================================================
 // CONFIGURAÇÕES E INICIALIZAÇÃO
@@ -49,356 +50,32 @@ app.use((req, res, next) => {
 });
 
 // ==============================================================
-// BANCO DE DADOS - MÓDULO
+// INICIALIZAÇÃO DO SUPABASE
 // ==============================================================
 
-const Database = {
-  db: null,
-  isPostgreSQL: process.env.NODE_ENV === 'production',
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
 
-  /**
-   * Inicializa a conexão com o banco de dados
-   */
-  initialize: async function () {
-    if (this.isPostgreSQL) {
-      try {
-        const { Client } = require('pg');
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Variáveis SUPABASE_URL ou SUPABASE_KEY não encontradas');
+  process.exit(1);
+}
 
-        // Verificar se a DATABASE_URL está disponível
-        const connectionString = process.env.DATABASE_URL;
-        if (!connectionString) {
-          console.error('DATABASE_URL não encontrada nas variáveis de ambiente');
-          console.log('Usando SQLite como fallback');
-          this.isPostgreSQL = false;
-          return this.initializeSQLite();
-        }
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-        console.log('Inicializando banco de dados. Modo: PostgreSQL');
-
-        // Configuração PostgreSQL para produção
-        this.db = new Client({
-          connectionString: connectionString,
-          ssl: { rejectUnauthorized: false }
-        });
-
-        await this.db.connect();
-        console.log('Conectado ao PostgreSQL com sucesso');
-        await this.createTables();
-      } catch (err) {
-        console.error('Erro ao conectar ao PostgreSQL:', err.message);
-        console.log('Falha na conexão PostgreSQL, usando SQLite como fallback');
-        this.isPostgreSQL = false;
-        return this.initializeSQLite();
-      }
-    } else {
-      return this.initializeSQLite();
+// Testar conexão
+supabase.from('professores').select('*').limit(1)
+  .then(({ error }) => {
+    if (error) {
+      console.error('Erro ao conectar ao Supabase:', error.message);
+      process.exit(1);
     }
-  },
-
-  /**
-   * Inicializa o SQLite para desenvolvimento/fallback
-   */
-  initializeSQLite: function () {
-    console.log('Inicializando banco de dados. Modo: SQLite');
-    const sqlite3 = require('sqlite3').verbose();
-    const dbPath = './database/sqlite.db';
-
-    // Garantir que o diretório existe
-    const dir = path.dirname(dbPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    this.db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        console.error('Erro ao conectar ao SQLite:', err.message);
-      } else {
-        console.log('Conectado ao SQLite com sucesso');
-        this.createTables();
-      }
-    });
-  },
-
-  /**
-   * Cria as tabelas do banco de dados
-   */
-  createTables: async function () {
-    const tablesSQLite = [
-      `CREATE TABLE IF NOT EXISTS professores (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        telefone TEXT,
-        especialidade TEXT,
-        limite_alunos INTEGER DEFAULT 5,
-        porcentagem_repassa INTEGER DEFAULT 70,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS alunos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        telefone TEXT,
-        data_nascimento TEXT,
-        instrumento_principal TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_configuradas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        instrumento TEXT NOT NULL,
-        turno TEXT NOT NULL CHECK(turno IN ('manhã', 'tarde', 'noite')),
-        professor_id INTEGER NOT NULL,
-        data_inicio TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (professor_id) REFERENCES professores (id)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_dias_semana (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        aula_id INTEGER NOT NULL,
-        dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-        UNIQUE(aula_id, dia_semana)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_alunos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        aula_id INTEGER NOT NULL,
-        aluno_id INTEGER NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-        FOREIGN KEY (aluno_id) REFERENCES alunos (id) ON DELETE CASCADE,
-        UNIQUE(aula_id, aluno_id)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_agendadas (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          aula_configurada_id INTEGER NOT NULL,
-          data_aula DATE NOT NULL,
-          status TEXT DEFAULT 'agendada' CHECK(status IN ('agendada', 'cancelada', 'realizada', 'reagendada')),
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (aula_configurada_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-          UNIQUE(aula_configurada_id, data_aula)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_reagendamentos (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          aula_agendada_id INTEGER NOT NULL,
-          nova_data DATE NOT NULL,
-          motivo TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (aula_agendada_id) REFERENCES aulas_agendadas (id) ON DELETE CASCADE
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS pagamentos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        aluno_id INTEGER,
-        valor REAL NOT NULL,
-        data_vencimento TEXT,
-        data_pagamento TEXT,
-        status TEXT DEFAULT 'pendente',
-        valor_repasse REAL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (aluno_id) REFERENCES alunos (id)
-      )`
-    ];
-
-    const tablesPostgreSQL = [
-      `CREATE TABLE IF NOT EXISTS professores (
-        id SERIAL PRIMARY KEY,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        telefone TEXT,
-        especialidade TEXT,
-        limite_alunos INTEGER DEFAULT 5,
-        porcentagem_repassa INTEGER DEFAULT 70,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS alunos (
-        id SERIAL PRIMARY KEY,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        telefone TEXT,
-        data_nascimento TEXT,
-        instrumento_principal TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_configuradas (
-        id SERIAL PRIMARY KEY,
-        instrumento TEXT NOT NULL,
-        turno TEXT NOT NULL CHECK(turno IN ('manhã', 'tarde', 'noite')),
-        professor_id INTEGER NOT NULL,
-        data_inicio TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (professor_id) REFERENCES professores (id)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_dias_semana (
-        id SERIAL PRIMARY KEY,
-        aula_id INTEGER NOT NULL,
-        dia_semana INTEGER NOT NULL CHECK(dia_semana BETWEEN 0 AND 6),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-        UNIQUE(aula_id, dia_semana)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_alunos (
-        id SERIAL PRIMARY KEY,
-        aula_id INTEGER NOT NULL,
-        aluno_id INTEGER NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (aula_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-        FOREIGN KEY (aluno_id) REFERENCES alunos (id) ON DELETE CASCADE,
-        UNIQUE(aula_id, aluno_id)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_agendadas (
-          id SERIAL PRIMARY KEY,
-          aula_configurada_id INTEGER NOT NULL,
-          data_aula DATE NOT NULL,
-          status TEXT DEFAULT 'agendada' CHECK(status IN ('agendada', 'cancelada', 'realizada', 'reagendada')),
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (aula_configurada_id) REFERENCES aulas_configuradas (id) ON DELETE CASCADE,
-          UNIQUE(aula_configurada_id, data_aula)
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS aulas_reagendamentos (
-          id SERIAL PRIMARY KEY,
-          aula_agendada_id INTEGER NOT NULL,
-          nova_data DATE NOT NULL,
-          motivo TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (aula_agendada_id) REFERENCES aulas_agendadas (id) ON DELETE CASCADE
-      )`,
-
-      `CREATE TABLE IF NOT EXISTS pagamentos (
-        id SERIAL PRIMARY KEY,
-        aluno_id INTEGER,
-        valor REAL NOT NULL,
-        data_vencimento TEXT,
-        data_pagamento TEXT,
-        status TEXT DEFAULT 'pendente',
-        valor_repasse REAL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (aluno_id) REFERENCES alunos (id)
-      )`
-    ];
-
-    try {
-      if (this.isPostgreSQL) {
-        for (const tableSQL of tablesPostgreSQL) {
-          await this.db.query(tableSQL);
-        }
-      } else {
-        for (const tableSQL of tablesSQLite) {
-          this.db.run(tableSQL);
-        }
-      }
-      console.log('Tabelas verificadas/criadas com sucesso');
-    } catch (err) {
-      console.error('Erro ao criar tabelas:', err);
-    }
-  },
-
-  /**
-   * Executa uma query no banco de dados
-   * @param {string} sql - Query SQL
-   * @param {Array} params - Parâmetros da query
-   * @returns {Promise} Promise com o resultado
-   */
-  run: function (sql, params = []) {
-    if (this.isPostgreSQL) {
-      // Converter placeholders '?' para $1, $2, ...
-      let convertedSQL = sql;
-      let paramIndex = 1;
-      convertedSQL = sql.replace(/\?/g, () => `$${paramIndex++}`);
-
-      return this.db.query(convertedSQL, params)
-        .then(result => ({
-          id: result.rows[0] ? result.rows[0].id : null,
-          changes: result.rowCount
-        }))
-        .catch(err => { throw err; });
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.run(sql, params, function (err) {
-          if (err) reject(err);
-          else resolve({ id: this.lastID, changes: this.changes });
-        });
-      });
-    }
-  },
-
-  /**
-   * Executa uma query e retorna uma única linha
-   * @param {string} sql - Query SQL
-   * @param {Array} params - Parâmetros da query
-   * @returns {Promise} Promise com o resultado
-   */
-  get: function (sql, params = []) {
-    if (this.isPostgreSQL) {
-      // Converter placeholders '?' para $1, $2, ...
-      let convertedSQL = sql;
-      let paramIndex = 1;
-      convertedSQL = sql.replace(/\?/g, () => `$${paramIndex++}`);
-
-      return this.db.query(convertedSQL, params)
-        .then(result => result.rows[0])
-        .catch(err => { throw err; });
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.get(sql, params, (err, row) => {
-          if (err) reject(err);
-          else resolve(row);
-        });
-      });
-    }
-  },
-
-  /**
-   * Executa uma query e retorna todas as linhas
-   * @param {string} sql - Query SQL
-   * @param {Array} params - Parâmetros da query
-   * @returns {Promise} Promise com o resultado
-   */
-  all: function (sql, params = []) {
-    if (this.isPostgreSQL) {
-      // Converter placeholders '?' para $1, $2, ...
-      let convertedSQL = sql;
-      let paramIndex = 1;
-      convertedSQL = sql.replace(/\?/g, () => `$${paramIndex++}`);
-
-      return this.db.query(convertedSQL, params)
-        .then(result => result.rows)
-        .catch(err => { throw err; });
-    } else {
-      return new Promise((resolve, reject) => {
-        this.db.all(sql, params, (err, rows) => {
-          if (err) reject(err);
-          else resolve(rows);
-        });
-      });
-    }
-  }
-};
-
-// Inicializar o banco de dados
-Database.initialize();
+    console.log('Conectado ao Supabase com sucesso');
+  })
+  .catch(err => {
+    console.error('Erro ao conectar ao Supabase:', err.message);
+    process.exit(1);
+  });
 
 // ==============================================================
 // UTILITÁRIOS
@@ -463,7 +140,7 @@ const Utils = {
 const GenericHandlers = {
   /**
    * Cria handlers CRUD genéricos para uma entidade
-   * @param {string} entityName - Nime da entidade (singular)
+   * @param {string} entityName - Nome da entidade (singular)
    * @param {string} tableName - Nome da tabela no banco
    * @param {Array} fields - Campos permitidos para criação/atualização
    * @param {Object} validations - Validações específicas por campo
@@ -473,8 +150,12 @@ const GenericHandlers = {
       // GET all
       getAll: async (req, res) => {
         try {
-          const rows = await Database.all(`SELECT * FROM ${tableName}`);
-          res.json({ [entityName + 's']: rows });
+          const { data, error } = await supabase
+            .from(tableName)
+            .select('*');
+
+          if (error) throw error;
+          res.json({ [tableName]: data });
         } catch (err) {
           res.status(500).json({ error: err.message });
         }
@@ -484,13 +165,18 @@ const GenericHandlers = {
       getById: async (req, res) => {
         try {
           const { id } = req.params;
-          const row = await Database.get(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
+          const { data, error } = await supabase
+            .from(tableName)
+            .select('*')
+            .eq('id', id)
+            .single();
 
-          if (!row) {
+          if (error) throw error;
+          if (!data) {
             return res.status(404).json({ error: `${entityName} não encontrado` });
           }
 
-          res.json(row);
+          res.json(data);
         } catch (err) {
           res.status(500).json({ error: err.message });
         }
@@ -507,21 +193,15 @@ const GenericHandlers = {
             return res.status(400).json({ errors: validationErrors });
           }
 
-          const columns = Object.keys(data).join(', ');
-          const placeholders = Object.keys(data).map(() => '?').join(', ');
-          const values = Object.values(data);
+          const { data: result, error } = await supabase
+            .from(tableName)
+            .insert(data)
+            .select();
 
-          // Para PostgreSQL, precisamos ajustar a query para retornar o ID inserido
-          let query = `INSERT INTO ${tableName} (${columns}) VALUES (${placeholders})`;
-
-          if (Database.isPostgreSQL) {
-            query += ' RETURNING id';
-          }
-
-          const result = await Database.run(query, values);
+          if (error) throw error;
 
           res.status(201).json({
-            id: result.id,
+            id: result[0].id,
             message: `${entityName} criado com sucesso`
           });
         } catch (err) {
@@ -535,7 +215,13 @@ const GenericHandlers = {
           const { id } = req.params;
 
           // Verificar se existe
-          const existing = await Database.get(`SELECT * FROM ${tableName} WHERE id = ?`, [id]);
+          const { data: existing, error: checkError } = await supabase
+            .from(tableName)
+            .select('*')
+            .eq('id', id)
+            .single();
+
+          if (checkError) throw checkError;
           if (!existing) {
             return res.status(404).json({ error: `${entityName} não encontrado` });
           }
@@ -553,17 +239,15 @@ const GenericHandlers = {
             return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
           }
 
-          const setClause = Object.keys(data).map(field => `${field} = ?`).join(', ');
-          const values = [...Object.values(data), id];
+          const { error } = await supabase
+            .from(tableName)
+            .update({ ...data, updated_at: new Date().toISOString() })
+            .eq('id', id);
 
-          const result = await Database.run(
-            `UPDATE ${tableName} SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-            values
-          );
+          if (error) throw error;
 
           res.json({
-            message: `${entityName} atualizado com sucesso`,
-            changes: result.changes
+            message: `${entityName} atualizado com sucesso`
           });
         } catch (err) {
           res.status(500).json({ error: err.message });
@@ -574,11 +258,12 @@ const GenericHandlers = {
       delete: async (req, res) => {
         try {
           const { id } = req.params;
-          const result = await Database.run(`DELETE FROM ${tableName} WHERE id = ?`, [id]);
+          const { error } = await supabase
+            .from(tableName)
+            .delete()
+            .eq('id', id);
 
-          if (result.changes === 0) {
-            return res.status(404).json({ error: `${entityName} não encontrado` });
-          }
+          if (error) throw error;
 
           res.json({ message: `${entityName} excluído com sucesso` });
         } catch (err) {
@@ -614,7 +299,7 @@ app.delete('/api/alunos/:id', alunosHandlers.delete);
 
 // Rotas para Professores
 const professoresHandlers = GenericHandlers.create(
-  'professore', 'professores',
+  'professor', 'professores',
   ['nome', 'email', 'telefone', 'especialidade', 'limite_alunos', 'porcentagem_repassa'],
   {
     nome: { required: true, type: 'string' },
@@ -640,9 +325,6 @@ const AulasHandlers = {
   /**
    * Configura uma nova aula
    */
-  /**
- * Configura uma nova aula
- */
   configurar: async (req, res) => {
     try {
       const { instrumento, turno, professor_id, data_inicio, dias_semana } = req.body;
@@ -657,40 +339,52 @@ const AulasHandlers = {
       }
 
       // Verificar se o professor existe
-      const professor = await Database.get('SELECT * FROM professores WHERE id = ?', [professor_id]);
+      const { data: professor, error: professorError } = await supabase
+        .from('professores')
+        .select('*')
+        .eq('id', professor_id)
+        .single();
+
+      if (professorError) throw professorError;
       if (!professor) {
         return res.status(404).json({ error: 'Professor não encontrado' });
       }
 
       // Inserir a configuração da aula
-      let query = 'INSERT INTO aulas_configuradas (instrumento, turno, professor_id, data_inicio) VALUES (?, ?, ?, ?)';
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_configuradas')
+        .insert({
+          instrumento,
+          turno,
+          professor_id,
+          data_inicio
+        })
+        .select()
+        .single();
 
-      if (Database.isPostgreSQL) {
-        query += ' RETURNING id';
-      }
-
-      const result = await Database.run(
-        query,
-        [instrumento, turno, professor_id, data_inicio]
-      );
-
-      const aulaId = result.id;
+      if (aulaError) throw aulaError;
 
       // Inserir os dias da semana
       for (const dia of dias_semana) {
         if (dia < 0 || dia > 6) {
           // Se houver erro, remover a aula criada
-          await Database.run('DELETE FROM aulas_configuradas WHERE id = ?', [aulaId]);
-          return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) и 6 (sábado)' });
+          await supabase
+            .from('aulas_configuradas')
+            .delete()
+            .eq('id', aula.id);
+          return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) e 6 (sábado)' });
         }
 
-        await Database.run(
-          'INSERT INTO aulas_dias_semana (aula_id, dia_semana) VALUES (?, ?)',
-          [aulaId, dia]
-        );
+        const { error: diaError } = await supabase
+          .from('aulas_dias_semana')
+          .insert({
+            aula_id: aula.id,
+            dia_semana: dia
+          });
+
+        if (diaError) throw diaError;
       }
 
-      // Após inserir os dias da semana, adicione:
       // Gerar agendamento para as próximas 4 semanas
       const dataInicio = new Date(data_inicio);
       for (let semana = 0; semana < 4; semana++) {
@@ -701,23 +395,27 @@ const AulasHandlers = {
           dataAula.setDate(dataAula.getDate() + diffDias);
 
           // Verificar se já existe agendamento para esta data
-          const existe = await Database.get(
-            'SELECT id FROM aulas_agendadas WHERE aula_configurada_id = ? AND data_aula = ?',
-            [aulaId, dataAula.toISOString().split('T')[0]]
-          );
+          const { data: existe } = await supabase
+            .from('aulas_agendadas')
+            .select('id')
+            .eq('aula_configurada_id', aula.id)
+            .eq('data_aula', dataAula.toISOString().split('T')[0])
+            .single();
 
           if (!existe) {
             // Inserir agendamento
-            await Database.run(
-              'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula) VALUES (?, ?)',
-              [aulaId, dataAula.toISOString().split('T')[0]]
-            );
+            await supabase
+              .from('aulas_agendadas')
+              .insert({
+                aula_configurada_id: aula.id,
+                data_aula: dataAula.toISOString().split('T')[0]
+              });
           }
         }
       }
 
       res.status(201).json({
-        id: aulaId,
+        id: aula.id,
         message: 'Aula configurada com sucesso'
       });
     } catch (err) {
@@ -730,46 +428,54 @@ const AulasHandlers = {
    */
   listarConfiguradas: async (req, res) => {
     try {
-      const isPostgreSQL = Database.isPostgreSQL;
+      // Primeiro, buscar as aulas configuradas com informações do professor
+      const { data: aulas, error } = await supabase
+        .from('aulas_configuradas')
+        .select(`
+        *,
+        professores(nome)
+      `);
 
-      const query = `
-      SELECT 
-        ac.*,
-        p.nome as professor_nome,
-        (
-          SELECT ${isPostgreSQL ? "STRING_AGG(dia_semana::text, ',')" : "GROUP_CONCAT(dia_semana)"}
-          FROM aulas_dias_semana 
-          WHERE aula_id = ac.id
-        ) as dias_semana,
-        (
-          SELECT COUNT(*) 
-          FROM aulas_alunos 
-          WHERE aula_id = ac.id
-        ) as total_alunos,
-        (
-          SELECT COUNT(*) 
-          FROM aulas_agendadas 
-          WHERE aula_configurada_id = ac.id
-        ) as total_agendadas,
-        (
-          SELECT COUNT(*) 
-          FROM aulas_agendadas 
-          WHERE aula_configurada_id = ac.id AND status = 'cancelada'
-        ) as total_canceladas
-      FROM aulas_configuradas ac
-      LEFT JOIN professores p ON ac.professor_id = p.id
-      ORDER BY ac.created_at DESC
-    `;
+      if (error) throw error;
 
-      const rows = await Database.all(query);
+      // Processar cada aula individualmente para obter os dados adicionais
+      const aulasProcessadas = await Promise.all(aulas.map(async (aula) => {
+        // Obter dias da semana
+        const { data: dias } = await supabase
+          .from('aulas_dias_semana')
+          .select('dia_semana')
+          .eq('aula_id', aula.id);
 
-      // Processar os dias da semana
-      const aulas = rows.map(aula => ({
-        ...aula,
-        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+        // Contar alunos
+        const { count: totalAlunos } = await supabase
+          .from('aulas_alunos')
+          .select('*', { count: 'exact', head: true })
+          .eq('aula_id', aula.id);
+
+        // Contar total de agendamentos
+        const { count: totalAgendadas } = await supabase
+          .from('aulas_agendadas')
+          .select('*', { count: 'exact', head: true })
+          .eq('aula_configurada_id', aula.id);
+
+        // Contar agendamentos cancelados
+        const { count: totalCanceladas } = await supabase
+          .from('aulas_agendadas')
+          .select('*', { count: 'exact', head: true })
+          .eq('aula_configurada_id', aula.id)
+          .eq('status', 'cancelada');
+
+        return {
+          ...aula,
+          professor_nome: aula.professores.nome,
+          dias_semana: dias ? dias.map(d => d.dia_semana) : [],
+          total_alunos: totalAlunos || 0,
+          total_agendadas: totalAgendadas || 0,
+          total_canceladas: totalCanceladas || 0
+        };
       }));
 
-      res.json({ aulas });
+      res.json({ aulas: aulasProcessadas });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -783,45 +489,46 @@ const AulasHandlers = {
       const { id } = req.params;
 
       // Obter informações da aula
-      const aulaQuery = `
-        SELECT 
-          ac.*,
-          p.nome as professor_nome,
-          p.especialidade as professor_especialidade
-        FROM aulas_configuradas ac
-        LEFT JOIN professores p ON ac.professor_id = p.id
-        WHERE ac.id = ?
-      `;
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_configuradas')
+        .select(`
+          *,
+          professores(nome, especialidade)
+        `)
+        .eq('id', id)
+        .single();
 
-      const aula = await Database.get(aulaQuery, [id]);
+      if (aulaError) throw aulaError;
       if (!aula) {
         return res.status(404).json({ error: 'Aula não encontrada' });
       }
 
       // Obter dias da semana
-      const diasRows = await Database.all(
-        'SELECT dia_semana FROM aulas_dias_semana WHERE aula_id = ?',
-        [id]
-      );
-      const dias_semana = diasRows.map(row => row.dia_semana);
+      const { data: dias, error: diasError } = await supabase
+        .from('aulas_dias_semana')
+        .select('dia_semana')
+        .eq('aula_id', id);
+
+      if (diasError) throw diasError;
+      const dias_semana = dias.map(d => d.dia_semana);
 
       // Obter alunos vinculados
-      const alunosRows = await Database.all(
-        `SELECT 
-          a.id,
-          a.nome,
-          a.email,
-          a.instrumento_principal
-        FROM aulas_alunos aa
-        LEFT JOIN alunos a ON aa.aluno_id = a.id
-        WHERE aa.aula_id = ?`,
-        [id]
-      );
+      const { data: alunos, error: alunosError } = await supabase
+        .from('aulas_alunos')
+        .select(`
+          alunos(id, nome, email, instrumento_principal)
+        `)
+        .eq('aula_id', id);
+
+      if (alunosError) throw alunosError;
+      const alunosProcessados = alunos.map(a => a.alunos);
 
       res.json({
         ...aula,
+        professor_nome: aula.professores.nome,
+        professor_especialidade: aula.professores.especialidade,
         dias_semana,
-        alunos: alunosRows
+        alunos: alunosProcessados
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -836,32 +543,51 @@ const AulasHandlers = {
       const { aulaId, alunoId } = req.params;
 
       // Verificar se a aula existe
-      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [aulaId]);
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_configuradas')
+        .select('*')
+        .eq('id', aulaId)
+        .single();
+
+      if (aulaError) throw aulaError;
       if (!aula) {
         return res.status(404).json({ error: 'Aula não encontrada' });
       }
 
       // Verificar se o aluno existe
-      const aluno = await Database.get('SELECT * FROM alunos WHERE id = ?', [alunoId]);
+      const { data: aluno, error: alunoError } = await supabase
+        .from('alunos')
+        .select('*')
+        .eq('id', alunoId)
+        .single();
+
+      if (alunoError) throw alunoError;
       if (!aluno) {
         return res.status(404).json({ error: 'Aluno não encontrado' });
       }
 
       // Verificar se o aluno já está vinculado a esta aula
-      const vinculo = await Database.get(
-        'SELECT * FROM aulas_alunos WHERE aula_id = ? AND aluno_id = ?',
-        [aulaId, alunoId]
-      );
+      const { data: vinculo, error: vinculoError } = await supabase
+        .from('aulas_alunos')
+        .select('*')
+        .eq('aula_id', aulaId)
+        .eq('aluno_id', alunoId)
+        .single();
 
+      if (vinculoError && vinculoError.code !== 'PGRST116') throw vinculoError;
       if (vinculo) {
         return res.status(400).json({ error: 'Aluno já está vinculado a esta aula' });
       }
 
       // Vincular aluno à aula
-      await Database.run(
-        'INSERT INTO aulas_alunos (aula_id, aluno_id) VALUES (?, ?)',
-        [aulaId, alunoId]
-      );
+      const { error: insertError } = await supabase
+        .from('aulas_alunos')
+        .insert({
+          aula_id: aulaId,
+          aluno_id: alunoId
+        });
+
+      if (insertError) throw insertError;
 
       res.status(201).json({ message: 'Aluno vinculado à aula com sucesso' });
     } catch (err) {
@@ -876,14 +602,13 @@ const AulasHandlers = {
     try {
       const { aulaId, alunoId } = req.params;
 
-      const result = await Database.run(
-        'DELETE FROM aulas_alunos WHERE aula_id = ? AND aluno_id = ?',
-        [aulaId, alunoId]
-      );
+      const { error } = await supabase
+        .from('aulas_alunos')
+        .delete()
+        .eq('aula_id', aulaId)
+        .eq('aluno_id', alunoId);
 
-      if (result.changes === 0) {
-        return res.status(404).json({ error: 'Vínculo não encontrado' });
-      }
+      if (error) throw error;
 
       res.json({ message: 'Aluno desvinculado da aula com sucesso' });
     } catch (err) {
@@ -897,33 +622,26 @@ const AulasHandlers = {
   obterAulasAluno: async (req, res) => {
     try {
       const { alunoId } = req.params;
-      const isPostgreSQL = Database.isPostgreSQL;
 
-      const query = `
-      SELECT 
-        ac.*,
-        p.nome as professor_nome,
-        p.especialidade as professor_especialidade,
-        (
-          SELECT ${isPostgreSQL ? "STRING_AGG(dia_semana::text, ',')" : "GROUP_CONCAT(dia_semana)"}
-          FROM aulas_dias_semana 
-          WHERE aula_id = ac.id
-        ) as dias_semana
-      FROM aulas_alunos aa
-      LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id
-      LEFT JOIN professores p ON ac.professor_id = p.id
-      WHERE aa.aluno_id = ?
-      ORDER BY ac.created_at DESC
-    `;
+      const { data: aulas, error } = await supabase
+        .from('aulas_alunos')
+        .select(`
+          aulas_configuradas(*, professores(nome, especialidade)),
+          aulas_dias_semana(dia_semana)
+        `)
+        .eq('aluno_id', alunoId);
 
-      const rows = await Database.all(query, [alunoId]);
+      if (error) throw error;
 
-      const aulas = rows.map(aula => ({
-        ...aula,
-        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+      // Processar os dados
+      const aulasProcessadas = aulas.map(aula => ({
+        ...aula.aulas_configuradas,
+        professor_nome: aula.aulas_configuradas.professores.nome,
+        professor_especialidade: aula.aulas_configuradas.professores.especialidade,
+        dias_semana: aula.aulas_dias_semana.map(d => d.dia_semana)
       }));
 
-      res.json({ aulas });
+      res.json({ aulas: aulasProcessadas });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -935,34 +653,26 @@ const AulasHandlers = {
   obterAulasProfessor: async (req, res) => {
     try {
       const { professorId } = req.params;
-      const isPostgreSQL = Database.isPostgreSQL;
 
-      const query = `
-      SELECT 
-        ac.*,
-        (
-          SELECT ${isPostgreSQL ? "STRING_AGG(dia_semana::text, ',')" : "GROUP_CONCAT(dia_semana)"}
-          FROM aulas_dias_semana 
-          WHERE aula_id = ac.id
-        ) as dias_semana,
-        (
-          SELECT COUNT(*) 
-          FROM aulas_alunos 
-          WHERE aula_id = ac.id
-        ) as total_alunos
-      FROM aulas_configuradas ac
-      WHERE ac.professor_id = ?
-      ORDER BY ac.created_at DESC
-    `;
+      const { data: aulas, error } = await supabase
+        .from('aulas_configuradas')
+        .select(`
+          *,
+          aulas_dias_semana(dia_semana),
+          aulas_alunos(count)
+        `)
+        .eq('professor_id', professorId);
 
-      const rows = await Database.all(query, [professorId]);
+      if (error) throw error;
 
-      const aulas = rows.map(aula => ({
+      // Processar os dados
+      const aulasProcessadas = aulas.map(aula => ({
         ...aula,
-        dias_semana: aula.dias_semana ? aula.dias_semana.split(',').map(Number) : []
+        dias_semana: aula.aulas_dias_semana.map(d => d.dia_semana),
+        total_alunos: aula.aulas_alunos[0]?.count || 0
       }));
 
-      res.json({ aulas });
+      res.json({ aulas: aulasProcessadas });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -977,47 +687,48 @@ const AulasHandlers = {
       const { instrumento, turno, data_inicio, dias_semana } = req.body;
 
       // Verificar se a aula existe
-      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_configuradas')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (aulaError) throw aulaError;
       if (!aula) {
         return res.status(404).json({ error: 'Aula não encontrada' });
       }
 
-      const updates = [];
-      const values = [];
-
-      if (instrumento !== undefined) {
-        updates.push('instrumento = ?');
-        values.push(instrumento);
-      }
+      const updates = {};
+      if (instrumento !== undefined) updates.instrumento = instrumento;
       if (turno !== undefined) {
         if (!['manhã', 'tarde', 'noite'].includes(turno)) {
           return res.status(400).json({ error: 'Turno deve ser "manhã", "tarde" ou "noite"' });
         }
-        updates.push('turno = ?');
-        values.push(turno);
+        updates.turno = turno;
       }
-      if (data_inicio !== undefined) {
-        updates.push('data_inicio = ?');
-        values.push(data_inicio);
-      }
+      if (data_inicio !== undefined) updates.data_inicio = data_inicio;
 
-      if (updates.length === 0 && !dias_semana) {
+      if (Object.keys(updates).length === 0 && !dias_semana) {
         return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
       }
 
       // Atualizar dados básicos da aula, se houver
-      if (updates.length > 0) {
-        values.push(id);
-        await Database.run(
-          `UPDATE aulas_configuradas SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-          values
-        );
+      if (Object.keys(updates).length > 0) {
+        const { error: updateError } = await supabase
+          .from('aulas_configuradas')
+          .update({ ...updates, updated_at: new Date().toISOString() })
+          .eq('id', id);
+
+        if (updateError) throw updateError;
       }
 
       // Atualizar dias da semana, se fornecidos
       if (dias_semana && Array.isArray(dias_semana)) {
         // Remover dias existentes
-        await Database.run('DELETE FROM aulas_dias_semana WHERE aula_id = ?', [id]);
+        await supabase
+          .from('aulas_dias_semana')
+          .delete()
+          .eq('aula_id', id);
 
         // Inserir novos dias
         for (const dia of dias_semana) {
@@ -1025,10 +736,14 @@ const AulasHandlers = {
             return res.status(400).json({ error: 'Dia da semana deve estar entre 0 (domingo) e 6 (sábado)' });
           }
 
-          await Database.run(
-            'INSERT INTO aulas_dias_semana (aula_id, dia_semana) VALUES (?, ?)',
-            [id, dia]
-          );
+          const { error: diaError } = await supabase
+            .from('aulas_dias_semana')
+            .insert({
+              aula_id: id,
+              dia_semana: dia
+            });
+
+          if (diaError) throw diaError;
         }
       }
 
@@ -1046,13 +761,24 @@ const AulasHandlers = {
       const { id } = req.params;
 
       // Verificar se a aula existe
-      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_configuradas')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (aulaError) throw aulaError;
       if (!aula) {
         return res.status(404).json({ error: 'Aula não encontrada' });
       }
 
       // Excluir a aula (as chaves estrangeiras com CASCADE cuidarão dos registros relacionados)
-      await Database.run('DELETE FROM aulas_configuradas WHERE id = ?', [id]);
+      const { error } = await supabase
+        .from('aulas_configuradas')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
 
       res.json({ message: 'Aula excluída com sucesso' });
     } catch (err) {
@@ -1061,25 +787,33 @@ const AulasHandlers = {
   },
 
   /**
- * Gera o agendamento de aulas com base na configuração
- */
+   * Gera o agendamento de aulas com base na configuração
+   */
   gerarAgendamento: async (req, res) => {
     try {
       const { id } = req.params;
       const { semanas } = req.body; // Número de semanas a gerar
 
       // Verificar se a aula existe
-      const aula = await Database.get('SELECT * FROM aulas_configuradas WHERE id = ?', [id]);
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_configuradas')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (aulaError) throw aulaError;
       if (!aula) {
         return res.status(404).json({ error: 'Aula não encontrada' });
       }
 
       // Obter dias da semana configurados
-      const diasRows = await Database.all(
-        'SELECT dia_semana FROM aulas_dias_semana WHERE aula_id = ?',
-        [id]
-      );
-      const dias_semana = diasRows.map(row => row.dia_semana);
+      const { data: dias, error: diasError } = await supabase
+        .from('aulas_dias_semana')
+        .select('dia_semana')
+        .eq('aula_id', id);
+
+      if (diasError) throw diasError;
+      const dias_semana = dias.map(d => d.dia_semana);
 
       if (dias_semana.length === 0) {
         return res.status(400).json({ error: 'Aula não possui dias da semana configurados' });
@@ -1097,17 +831,25 @@ const AulasHandlers = {
           dataAula.setDate(dataAula.getDate() + diffDias);
 
           // Verificar se já existe agendamento para esta data
-          const existe = await Database.get(
-            'SELECT id FROM aulas_agendadas WHERE aula_configurada_id = ? AND data_aula = ?',
-            [id, dataAula.toISOString().split('T')[0]]
-          );
+          const { data: existe } = await supabase
+            .from('aulas_agendadas')
+            .select('id')
+            .eq('aula_configurada_id', id)
+            .eq('data_aula', dataAula.toISOString().split('T')[0])
+            .single();
 
           if (!existe) {
             // Inserir agendamento
-            const result = await Database.run(
-              'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula) VALUES (?, ?)',
-              [id, dataAula.toISOString().split('T')[0]]
-            );
+            const { data: result, error: insertError } = await supabase
+              .from('aulas_agendadas')
+              .insert({
+                aula_configurada_id: id,
+                data_aula: dataAula.toISOString().split('T')[0]
+              })
+              .select()
+              .single();
+
+            if (insertError) throw insertError;
             agendamentos.push({ id: result.id, data_aula: dataAula.toISOString().split('T')[0] });
           }
         }
@@ -1129,25 +871,22 @@ const AulasHandlers = {
     try {
       const { id } = req.params;
       const { data_inicio, data_fim } = req.query;
-      const isPostgreSQL = Database.isPostgreSQL;
 
-      let query = `
-      SELECT aa.*, ar.nova_data, ar.motivo
-      FROM aulas_agendadas aa
-      LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
-      WHERE aa.aula_configurada_id = ${isPostgreSQL ? '$1' : '?'}
-    `;
-
-      let params = [id];
+      let query = supabase
+        .from('aulas_agendadas')
+        .select('*, aulas_reagendamentos(nova_data, motivo)')
+        .eq('aula_configurada_id', id);
 
       if (data_inicio && data_fim) {
-        query += ` AND aa.data_aula BETWEEN ${isPostgreSQL ? '$2 AND $3' : '? AND ?'}`;
-        params.push(data_inicio, data_fim);
+        query = query.gte('data_aula', data_inicio).lte('data_aula', data_fim);
       }
 
-      query += ' ORDER BY aa.data_aula';
+      query = query.order('data_aula');
 
-      const agendamentos = await Database.all(query, params);
+      const { data: agendamentos, error } = await query;
+
+      if (error) throw error;
+
       res.json({ agendamentos });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1157,20 +896,26 @@ const AulasHandlers = {
   obterUmAgendamento: async (req, res) => {
     try {
       const { id } = req.params;
-      const agendamento = await Database.get(
-        `SELECT aa.*, ac.instrumento, p.nome as professor_nome 
-             FROM aulas_agendadas aa
-             INNER JOIN aulas_configuradas ac ON aa.aula_configurada_id = ac.id
-             INNER JOIN professores p ON ac.professor_id = p.id
-             WHERE aa.id = ?`,
-        [id]
-      );
 
+      const { data: agendamento, error } = await supabase
+        .from('aulas_agendadas')
+        .select(`
+          *,
+          aulas_configuradas(instrumento, professores(nome))
+        `)
+        .eq('id', id)
+        .single();
+
+      if (error) throw error;
       if (!agendamento) {
         return res.status(404).json({ error: 'Agendamento não encontrado' });
       }
 
-      res.json(agendamento);
+      res.json({
+        ...agendamento,
+        instrumento: agendamento.aulas_configuradas.instrumento,
+        professor_nome: agendamento.aulas_configuradas.professores.nome
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1185,16 +930,24 @@ const AulasHandlers = {
       const { motivo } = req.body;
 
       // Verificar se o agendamento existe
-      const agendamento = await Database.get('SELECT * FROM aulas_agendadas WHERE id = ?', [id]);
+      const { data: agendamento, error: agendamentoError } = await supabase
+        .from('aulas_agendadas')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (agendamentoError) throw agendamentoError;
       if (!agendamento) {
         return res.status(404).json({ error: 'Agendamento não encontrado' });
       }
 
       // Atualizar status para cancelada
-      await Database.run(
-        'UPDATE aulas_agendadas SET status = "cancelada", updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [id]
-      );
+      const { error } = await supabase
+        .from('aulas_agendadas')
+        .update({ status: 'cancelada', updated_at: new Date().toISOString() })
+        .eq('id', id);
+
+      if (error) throw error;
 
       res.json({ message: 'Aula cancelada com sucesso' });
     } catch (err) {
@@ -1211,7 +964,13 @@ const AulasHandlers = {
       const { nova_data, motivo } = req.body;
 
       // Verificar se o agendamento existe
-      const agendamento = await Database.get('SELECT * FROM aulas_agendadas WHERE id = ?', [id]);
+      const { data: agendamento, error: agendamentoError } = await supabase
+        .from('aulas_agendadas')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (agendamentoError) throw agendamentoError;
       if (!agendamento) {
         return res.status(404).json({ error: 'Agendamento não encontrado' });
       }
@@ -1222,22 +981,34 @@ const AulasHandlers = {
       }
 
       // Registrar o reagendamento
-      await Database.run(
-        'INSERT INTO aulas_reagendamentos (aula_agendada_id, nova_data, motivo) VALUES (?, ?, ?)',
-        [id, nova_data, motivo]
-      );
+      const { error: reagendamentoError } = await supabase
+        .from('aulas_reagendamentos')
+        .insert({
+          aula_agendada_id: id,
+          nova_data,
+          motivo
+        });
+
+      if (reagendamentoError) throw reagendamentoError;
 
       // Atualizar status do agendamento original
-      await Database.run(
-        'UPDATE aulas_agendadas SET status = "reagendada", updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-        [id]
-      );
+      await supabase
+        .from('aulas_agendadas')
+        .update({ status: 'reagendada', updated_at: new Date().toISOString() })
+        .eq('id', id);
 
       // Criar novo agendamento para a nova data
-      const result = await Database.run(
-        'INSERT INTO aulas_agendadas (aula_configurada_id, data_aula, status) VALUES (?, ?, "agendada")',
-        [agendamento.aula_configurada_id, nova_data]
-      );
+      const { data: result, error: insertError } = await supabase
+        .from('aulas_agendadas')
+        .insert({
+          aula_configurada_id: agendamento.aula_configurada_id,
+          data_aula: nova_data,
+          status: 'agendada'
+        })
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
 
       res.json({
         message: 'Aula reagendada com sucesso',
@@ -1254,7 +1025,6 @@ const AulasHandlers = {
   obterAgendaSemanal: async (req, res) => {
     try {
       const { data_inicio } = req.query;
-      const isPostgreSQL = Database.isPostgreSQL;
 
       // Se não fornecer data_início, usa a segunda-feira da semana atual
       let inicioSemana;
@@ -1271,34 +1041,32 @@ const AulasHandlers = {
       const fimSemana = new Date(inicioSemana);
       fimSemana.setDate(inicioSemana.getDate() + 6);
 
-      const query = `
-      SELECT 
-        aa.*,
-        ac.instrumento,
-        ac.turno,
-        p.nome as professor_nome,
-        p.especialidade as professor_especialidade,
-        ar.nova_data,
-        ar.motivo
-      FROM aulas_agendadas aa
-      INNER JOIN aulas_configuradas ac ON aa.aula_configurada_id = ac.id
-      INNER JOIN professores p ON ac.professor_id = p.id
-      LEFT JOIN aulas_reagendamentos ar ON aa.id = ar.aula_agendada_id
-      WHERE aa.data_aula BETWEEN ${isPostgreSQL ? '$1 AND $2' : '? AND ?'}
-      ORDER BY aa.data_aula, ac.turno
-    `;
+      const { data: agendamentos, error } = await supabase
+        .from('aulas_agendadas')
+        .select(`
+          *,
+          aulas_configuradas(instrumento, turno, professores(nome, especialidade)),
+          aulas_reagendamentos(nova_data, motivo)
+        `)
+        .gte('data_aula', inicioSemana.toISOString().split('T')[0])
+        .lte('data_aula', fimSemana.toISOString().split('T')[0])
+        .order('data_aula')
+        .order('turno', { foreignTable: 'aulas_configuradas' });
 
-      const params = [
-        inicioSemana.toISOString().split('T')[0],
-        fimSemana.toISOString().split('T')[0]
-      ];
-
-      const agendamentos = await Database.all(query, params);
+      if (error) throw error;
 
       res.json({
         semana_inicio: inicioSemana.toISOString().split('T')[0],
         semana_fim: fimSemana.toISOString().split('T')[0],
-        agendamentos
+        agendamentos: agendamentos.map(a => ({
+          ...a,
+          instrumento: a.aulas_configuradas.instrumento,
+          turno: a.aulas_configuradas.turno,
+          professor_nome: a.aulas_configuradas.professores.nome,
+          professor_especialidade: a.aulas_configuradas.professores.especialidade,
+          nova_data: a.aulas_reagendamentos[0]?.nova_data,
+          motivo: a.aulas_reagendamentos[0]?.motivo
+        }))
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -1337,15 +1105,17 @@ const FinanceiroHandlers = {
    */
   listar: async (req, res) => {
     try {
-      const query = `
-        SELECT p.*, a.nome as aluno_nome 
-        FROM pagamentos p 
-        LEFT JOIN alunos a ON p.aluno_id = a.id
-        ORDER BY p.data_vencimento DESC
-      `;
+      const { data: pagamentos, error } = await supabase
+        .from('pagamentos')
+        .select('*, alunos(nome)')
+        .order('data_vencimento', { ascending: false });
 
-      const rows = await Database.all(query);
-      res.json(rows);
+      if (error) throw error;
+
+      res.json(pagamentos.map(p => ({
+        ...p,
+        aluno_nome: p.alunos.nome
+      })));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1357,19 +1127,21 @@ const FinanceiroHandlers = {
   obter: async (req, res) => {
     try {
       const { id } = req.params;
-      const query = `
-        SELECT p.*, a.nome as aluno_nome 
-        FROM pagamentos p 
-        LEFT JOIN alunos a ON p.aluno_id = a.id
-        WHERE p.id = ?
-      `;
+      const { data: pagamento, error } = await supabase
+        .from('pagamentos')
+        .select('*, alunos(nome)')
+        .eq('id', id)
+        .single();
 
-      const row = await Database.get(query, [id]);
-      if (!row) {
+      if (error) throw error;
+      if (!pagamento) {
         return res.status(404).json({ error: 'Pagamento não encontrado' });
       }
 
-      res.json(row);
+      res.json({
+        ...pagamento,
+        aluno_nome: pagamento.alunos.nome
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1391,12 +1163,18 @@ const FinanceiroHandlers = {
         return res.status(400).json({ error: 'O valor deve ser maior que zero' });
       }
 
-      const result = await Database.run(
-        'INSERT INTO pagamentos (aluno_id, valor, data_vencimento) VALUES (?, ?, ?)',
-        [aluno_id, valor, data_vencimento]
-      );
+      const { data: result, error } = await supabase
+        .from('pagamentos')
+        .insert({
+          aluno_id,
+          valor,
+          data_vencimento
+        })
+        .select();
 
-      res.status(201).json({ id: result.id, message: 'Pagamento registrado com sucesso' });
+      if (error) throw error;
+
+      res.status(201).json({ id: result[0].id, message: 'Pagamento registrado com sucesso' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1411,50 +1189,37 @@ const FinanceiroHandlers = {
       const { aluno_id, valor, data_vencimento, status, data_pagamento, valor_repasse } = req.body;
 
       // Verificar se o pagamento existe
-      const pagamento = await Database.get('SELECT * FROM pagamentos WHERE id = ?', [id]);
+      const { data: pagamento, error: pagamentoError } = await supabase
+        .from('pagamentos')
+        .select('*')
+        .eq('id', id)
+        .single();
+
+      if (pagamentoError) throw pagamentoError;
       if (!pagamento) {
         return res.status(404).json({ error: 'Pagamento não encontrado' });
       }
 
-      const updates = [];
-      const values = [];
+      const updates = {};
+      if (aluno_id !== undefined) updates.aluno_id = aluno_id;
+      if (valor !== undefined) updates.valor = valor;
+      if (data_vencimento !== undefined) updates.data_vencimento = data_vencimento;
+      if (status !== undefined) updates.status = status;
+      if (data_pagamento !== undefined) updates.data_pagamento = data_pagamento;
+      if (valor_repasse !== undefined) updates.valor_repasse = valor_repasse;
 
-      if (aluno_id !== undefined) {
-        updates.push('aluno_id = ?');
-        values.push(aluno_id);
-      }
-      if (valor !== undefined) {
-        updates.push('valor = ?');
-        values.push(valor);
-      }
-      if (data_vencimento !== undefined) {
-        updates.push('data_vencimento = ?');
-        values.push(data_vencimento);
-      }
-      if (status !== undefined) {
-        updates.push('status = ?');
-        values.push(status);
-      }
-      if (data_pagamento !== undefined) {
-        updates.push('data_pagamento = ?');
-        values.push(data_pagamento);
-      }
-      if (valor_repasse !== undefined) {
-        updates.push('valor_repasse = ?');
-        values.push(valor_repasse);
-      }
-
-      if (updates.length === 0) {
+      if (Object.keys(updates).length === 0) {
         return res.status(400).json({ error: 'Nenhum campo válido para atualização' });
       }
 
-      values.push(id);
-      const result = await Database.run(
-        `UPDATE pagamentos SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-        values
-      );
+      const { error } = await supabase
+        .from('pagamentos')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('id', id);
 
-      res.json({ message: 'Pagamento atualizado com sucesso', changes: result.changes });
+      if (error) throw error;
+
+      res.json({ message: 'Pagamento atualizado com sucesso' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -1466,11 +1231,12 @@ const FinanceiroHandlers = {
   excluir: async (req, res) => {
     try {
       const { id } = req.params;
-      const result = await Database.run('DELETE FROM pagamentos WHERE id = ?', [id]);
+      const { error } = await supabase
+        .from('pagamentos')
+        .delete()
+        .eq('id', id);
 
-      if (result.changes === 0) {
-        return res.status(404).json({ error: 'Pagamento não encontrado' });
-      }
+      if (error) throw error;
 
       res.json({ message: 'Pagamento excluído com sucesso' });
     } catch (err) {
@@ -1479,39 +1245,53 @@ const FinanceiroHandlers = {
   },
 
   /**
- * Processa um pagamento
- */
+   * Processa um pagamento
+   */
   processarPagamento: async (req, res) => {
     try {
       const { id } = req.params;
       const { data_pagamento } = req.body;
 
       // Obter informações do pagamento e do aluno
-      const pagamento = await Database.get(
-        'SELECT p.*, a.nome as aluno_nome FROM pagamentos p LEFT JOIN alunos a ON p.aluno_id = a.id WHERE p.id = ?',
-        [id]
-      );
+      const { data: pagamento, error: pagamentoError } = await supabase
+        .from('pagamentos')
+        .select('*, alunos(nome)')
+        .eq('id', id)
+        .single();
 
+      if (pagamentoError) throw pagamentoError;
       if (!pagamento) {
         return res.status(404).json({ error: 'Pagamento não encontrado' });
       }
 
       // Obter a aula relacionada a este aluno para calcular o repasse
-      const aula = await Database.get(
-        'SELECT ac.*, p.porcentagem_repassa FROM aulas_alunos aa LEFT JOIN aulas_configuradas ac ON aa.aula_id = ac.id LEFT JOIN professores p ON ac.professor_id = p.id WHERE aa.aluno_id = ? LIMIT 1',
-        [pagamento.aluno_id]
-      );
+      const { data: aula, error: aulaError } = await supabase
+        .from('aulas_alunos')
+        .select(`
+          aulas_configuradas(professor_id),
+          professores(porcentagem_repassa)
+        `)
+        .eq('aluno_id', pagamento.aluno_id)
+        .limit(1)
+        .single();
 
       let valor_repasse = 0;
-      if (aula && aula.porcentagem_repassa) {
-        valor_repasse = pagamento.valor * (aula.porcentagem_repassa / 100);
+      if (aula && aula.professores.porcentagem_repassa) {
+        valor_repasse = pagamento.valor * (aula.professores.porcentagem_repassa / 100);
       }
 
       // Atualizar o pagamento
-      await Database.run(
-        'UPDATE pagamentos SET status = $1, data_pagamento = $2, valor_repasse = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4',
-        ['pago', data_pagamento || new Date().toISOString(), valor_repasse, id]
-      );
+      const { error } = await supabase
+        .from('pagamentos')
+        .update({
+          status: 'pago',
+          data_pagamento: data_pagamento || new Date().toISOString(),
+          valor_repasse,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+
+      if (error) throw error;
 
       res.json({ message: 'Pagamento processado com sucesso', valor_repasse });
     } catch (err) {
@@ -1537,30 +1317,49 @@ app.post('/api/financeiro/:id/pagar', FinanceiroHandlers.processarPagamento);
 
 app.get('/api/relatorios/resumo', async (req, res) => {
   try {
-    const isPostgreSQL = Database.isPostgreSQL;
+    // Total de alunos
+    const { count: totalAlunos, error: alunosError } = await supabase
+      .from('alunos')
+      .select('*', { count: 'exact', head: true });
 
-    // Consultas compatíveis com ambos os bancos
-    const queries = {
-      totalAlunos: 'SELECT COUNT(*) as total FROM alunos',
-      totalProfessores: 'SELECT COUNT(*) as total FROM professores',
-      totalAulasConfiguradas: 'SELECT COUNT(*) as total FROM aulas_configuradas',
-      receitaMensal: isPostgreSQL
-        ? `SELECT COALESCE(SUM(valor), 0) as total FROM pagamentos WHERE status = 'pago' 
-           AND EXTRACT(YEAR FROM data_pagamento::date) = EXTRACT(YEAR FROM CURRENT_DATE)
-           AND EXTRACT(MONTH FROM data_pagamento::date) = EXTRACT(MONTH FROM CURRENT_DATE)`
-        : `SELECT COALESCE(SUM(valor), 0) as total FROM pagamentos WHERE status = 'pago' 
-           AND strftime('%Y', data_pagamento) = strftime('%Y', 'now') 
-           AND strftime('%m', data_pagamento) = strftime('%m', 'now')`
-    };
+    if (alunosError) throw alunosError;
 
-    const results = {};
+    // Total de professores
+    const { count: totalProfessores, error: professoresError } = await supabase
+      .from('professores')
+      .select('*', { count: 'exact', head: true });
 
-    for (const [key, query] of Object.entries(queries)) {
-      const row = await Database.get(query);
-      results[key] = row ? row.total : 0;
-    }
+    if (professoresError) throw professoresError;
 
-    res.json(results);
+    // Total de aulas configuradas
+    const { count: totalAulasConfiguradas, error: aulasError } = await supabase
+      .from('aulas_configuradas')
+      .select('*', { count: 'exact', head: true });
+
+    if (aulasError) throw aulasError;
+
+    // Receita mensal
+    const now = new Date();
+    const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+
+    const { data: receita, error: receitaError } = await supabase
+      .from('pagamentos')
+      .select('valor')
+      .eq('status', 'pago')
+      .gte('data_pagamento', firstDayOfMonth)
+      .lte('data_pagamento', lastDayOfMonth);
+
+    if (receitaError) throw receitaError;
+
+    const receitaMensal = receita.reduce((total, p) => total + p.valor, 0);
+
+    res.json({
+      totalAlunos,
+      totalProfessores,
+      totalAulasConfiguradas,
+      receitaMensal
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
